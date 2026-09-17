@@ -1,19 +1,9 @@
-# --- Ядро ---
-aiogram>=3.30.0            # Telegram-бот
-httpx>=0.27.0              # HTTP-клиент к AI Provider (был не объявлен!)
-requests>=2.32.0           # загрузка изображений, Telegram Bot API, MAX API
-python-dotenv>=1.0.0       # чтение .env вместо ручного export
-
-# --- Источники ---
-feedparser>=6.0.11         # RSS-ленты (РИА, ТАСС)
-beautifulsoup4>=4.12.0     # разбор публичных страниц t.me/s/<channel>
-
-# --- Изображения ---
-# Pillow обязателен: он рисует фирменную карточку, которая служит
-# гарантированным изображением для поста, когда у источника нет фото,
-# а у AI Provider нет эндпоинта генерации (см. pipeline/image_pipeline.py).
+aiogram>=3.30.0
+httpx>=0.27.0
+requests>=2.32.0
+python-dotenv>=1.0.0
+feedparser>=6.0.11
+beautifulsoup4>=4.12.0
 Pillow>=10.0.0
-
-# --- Веб-панель модерации ---
 fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
+uvicorn>=0.32.0
