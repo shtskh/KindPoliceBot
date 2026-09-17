@@ -208,7 +208,7 @@ def init_db(db_path: str):
 
 
 # Первая версия бота записывала каналы МВД в Telegram с идентификаторами
-# вида "mvd_tg_mediamvd". В новом справочнике (data/resources_seed.py) у
+# вида "mvd_tg_mediamvd". В новом справочнике (content/resources_seed.py) у
 # них id "tg_mediamvd", поэтому на уже работающей базе вставка НЕ считала
 # их дубликатами и в публичном меню каждый канал появлялся дважды.
 LEGACY_RESOURCE_ID_PREFIX = "mvd_tg_"

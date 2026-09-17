@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from config import settings
-from data.help_content import DISCLAIMER
+from content.help_content import DISCLAIMER
 from logging_setup import get_logger
 from pipeline.ai_client import AIProviderError, chat
 from storage import db

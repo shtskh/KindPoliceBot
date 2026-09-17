@@ -442,8 +442,8 @@ def test_sources() -> None:
 # ==========================================================================
 
 def test_seed() -> None:
-    from data.regions import region_for_code
-    from data.resources_seed import build_seed_resources, seed_counts
+    from content.regions import region_for_code
+    from content.resources_seed import build_seed_resources, seed_counts
 
     section("Справочник источников")
 
@@ -565,7 +565,7 @@ def test_assistant() -> None:
 # ==========================================================================
 
 def test_audience_and_content() -> None:
-    from data.help_content import (
+    from content.help_content import (
         EMERGENCY_PHONES, SITUATION_BY_KEY, SITUATIONS, TRUST_PHONES,
     )
     from storage import db

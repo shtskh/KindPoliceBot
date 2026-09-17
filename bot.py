@@ -47,11 +47,11 @@ from aiogram.utils.text_decorations import html_decoration
 from aiogram.utils.token import TokenValidationError
 
 from config import settings, validate_settings
-from data.help_content import (
+from content.help_content import (
     ABOUT_TEXT, DISCLAIMER, EDUCATION_INFO, EMERGENCY_PHONES,
     SITUATION_BY_KEY, SITUATIONS, TRUST_PHONES,
 )
-from data.resources_seed import build_seed_resources, seed_counts
+from content.resources_seed import build_seed_resources, seed_counts
 from pipeline import assistant
 from delivery.tg_delivery import (
     TelegramDelivery,
@@ -2095,7 +2095,7 @@ async def cmd_remove_resource(message: Message):
 async def cmd_reseed(message: Message):
     """
     Перезаливает встроенный справочник, обновляя названия и ссылки
-    существующих записей. Нужно после обновления data/resources_seed.py.
+    существующих записей. Нужно после обновления content/resources_seed.py.
     """
     if not await _require_role(message, UserRole.ADMIN):
         return
