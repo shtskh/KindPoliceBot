@@ -7,6 +7,8 @@
 сгенерировалась картинка, было невозможно. Теперь всё идёт через logging
 с ротацией файла, чтобы логи не съели диск за месяц работы.
 """
+from __future__ import annotations
+
 import logging
 import logging.handlers
 import sys

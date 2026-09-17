@@ -4,6 +4,8 @@
 (токен получается за минуту, без верификации юрлица), а потом
 подключить Max как второй канал, не переписывая пайплайн.
 """
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 
 

@@ -2,6 +2,8 @@
 Единая модель "новости" — то, что передаётся между этапами пайплайна:
 источник -> верификация -> рерайт -> изображение -> модерация -> публикация.
 """
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
