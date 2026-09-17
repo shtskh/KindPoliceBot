@@ -37,7 +37,9 @@ from pipeline.rewrite import rewrite_news_item
 from pipeline.verify import verify_news_item
 from sources.keyword_filter import filter_by_keywords
 from sources.rss_source import RSSSource
-from sources.telegram_channel_source import TelegramChannelSource
+from sources.tg_channel_source import (
+    TelegramChannelSource,
+)
 from storage import db
 from storage.models import NewsItem, NewsStatus, RawNewsItem
 

@@ -27,7 +27,10 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+)
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -50,7 +53,10 @@ from data.help_content import (
 )
 from data.resources_seed import build_seed_resources, seed_counts
 from pipeline import assistant
-from delivery.telegram_delivery import TelegramDelivery, strip_html
+from delivery.tg_delivery import (
+    TelegramDelivery,
+    strip_html,
+)
 from logging_setup import setup_logging
 from paths import resolve
 from pipeline import image_pipeline

@@ -45,7 +45,9 @@ if os.getenv("KP_FLOW_KEEP_AI") != "1":
     os.environ["AI_PROVIDER_API_KEY"] = ""
 
 from aiogram.client.session.base import BaseSession  # noqa: E402
-from aiogram.methods import TelegramMethod  # noqa: E402
+from aiogram.methods import (  # noqa: E402
+    TelegramMethod,
+)
 from aiogram.types import (  # noqa: E402
     CallbackQuery, Chat, Message, Update, User,
 )

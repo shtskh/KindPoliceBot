@@ -359,7 +359,7 @@ def test_images() -> None:
 # ==========================================================================
 
 def test_delivery() -> None:
-    from delivery.telegram_delivery import _safe_truncate_html, strip_html
+    from delivery.tg_delivery import _safe_truncate_html, strip_html
 
     section("Доставка в Telegram")
 
@@ -380,7 +380,9 @@ def test_delivery() -> None:
 def test_sources() -> None:
     from sources.keyword_filter import filter_by_keywords
     from sources.rss_source import RSSSource
-    from sources.telegram_channel_source import TelegramChannelSource
+    from sources.tg_channel_source import (
+        TelegramChannelSource,
+    )
     from storage.models import RawNewsItem
 
     section("Источники")

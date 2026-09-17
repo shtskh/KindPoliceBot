@@ -36,7 +36,9 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from config import settings, validate_settings
-from delivery.telegram_delivery import TelegramDelivery
+from delivery.tg_delivery import (
+    TelegramDelivery,
+)
 from logging_setup import setup_logging
 from paths import resolve
 from pipeline import image_pipeline

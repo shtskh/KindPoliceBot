@@ -157,7 +157,7 @@ class MaxDelivery(DeliveryChannel):
 
         # MAX не поддерживает HTML-разметку Telegram — отправляем чистый
         # текст, иначе в посте будут видны сами теги <b> и <i>.
-        from delivery.telegram_delivery import strip_html
+        from delivery.tg_delivery import strip_html
 
         body = strip_html(text or "").strip()
         if len(body) > MESSAGE_LIMIT:
