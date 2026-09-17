@@ -1,0 +1,14 @@
+.git
+.venv
+venv
+.idea
+.vscode
+__pycache__
+*.pyc
+.env
+logs
+storage/bot.db
+storage/bot.db-wal
+storage/bot.db-shm
+storage/images
+tests
