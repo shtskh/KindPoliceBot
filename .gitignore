@@ -1,0 +1,25 @@
+# Секреты — НИКОГДА не коммитить
+.env
+*.env
+!.env.example
+
+# IDE-конфиги: в .idea/workspace.xml PyCharm сохраняет переменные
+# окружения из run-конфигураций, включая живые токены бота и API-ключи.
+.idea/
+.vscode/
+
+# Виртуальное окружение
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Данные рантайма
+storage/bot.db
+storage/bot.db-wal
+storage/bot.db-shm
+storage/images/
+logs/
