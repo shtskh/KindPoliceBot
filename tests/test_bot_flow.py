@@ -50,7 +50,7 @@ from aiogram.types import (  # noqa: E402
     CallbackQuery, Chat, Message, Update, User,
 )
 
-import telegram_bot as tb  # noqa: E402
+import bot as tb  # noqa: E402
 from config import settings  # noqa: E402
 from data.resources_seed import build_seed_resources  # noqa: E402
 from storage import db  # noqa: E402

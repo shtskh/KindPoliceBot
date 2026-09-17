@@ -364,7 +364,7 @@ def get_image(item_id: str, _: str = Depends(require_auth)):
 
 @app.post("/approve/{item_id}")
 def approve(item_id: str, _: str = Depends(require_auth)):
-    from telegram_bot import build_post_text  # локальный импорт: тот же формат поста
+    from bot import build_post_text  # локальный импорт: тот же формат поста
 
     item = db.get_by_id(settings.db_path, item_id)
     if not item:
