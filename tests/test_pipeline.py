@@ -662,11 +662,52 @@ def test_audience_and_content() -> None:
           any("222-74-47" in p.number for p in TRUST_PHONES))
 
 
+# ==========================================================================
+# 12. Ранжирование кандидатов
+# ==========================================================================
+
+def test_ranking() -> None:
+    from datetime import datetime, timezone
+
+    from pipeline.ranking import rank_candidates, score_item
+    from storage.models import RawNewsItem
+
+    section("Ранжирование кандидатов")
+
+    def item(title: str, body: str = "") -> RawNewsItem:
+        return RawNewsItem(
+            source_name="МВД: тест", source_url="https://x/1", title=title,
+            raw_text=body or title * 10, published_at=datetime.now(timezone.utc),
+        )
+
+    rescue = item("Полицейский спас женщину из горящего дома")
+    routine = item("Задержан подозреваемый в сбыте наркотических средств")
+    report = item("Начальник управления поздравил личный состав с праздником")
+
+    check("спасение получает плюс", score_item(rescue) > 0, str(score_item(rescue)))
+    check("наркосводка получает минус", score_item(routine) < 0, str(score_item(routine)))
+    check("поздравление получает минус", score_item(report) < 0, str(score_item(report)))
+    check("спасение важнее сводки", score_item(rescue) > score_item(routine))
+
+    # Главное свойство: порядок очереди, а не отсев. Новость с низким
+    # баллом остаётся в списке и будет проверена, если хватит лимита.
+    ranked = rank_candidates([routine, report, rescue])
+    check("спасение идёт первым", ranked[0] is rescue)
+    check("ничего не потеряно", len(ranked) == 3)
+
+    # Заголовок весит больше тела: в лентах МВД суть выносят в заголовок.
+    in_title = item("Полицейские спасли ребёнка", "рутинный текст " * 30)
+    in_body = item("Сводка происшествий", "полицейские спасли ребёнка " * 3)
+    check("заголовок весит больше тела", score_item(in_title) > score_item(in_body))
+
+    check("пустая новость не роняет оценку", isinstance(score_item(item("", "")), int))
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
         test_images, test_delivery, test_sources, test_seed, test_ai_client,
-        test_assistant, test_audience_and_content,
+        test_assistant, test_audience_and_content, test_ranking,
     )
 
     for test in tests:

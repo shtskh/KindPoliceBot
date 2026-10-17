@@ -30,9 +30,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from config import settings
+from content.regions import region_for_code
 from logging_setup import get_logger
 from pipeline.image_pipeline import get_image_for_item
 from pipeline.post_formatting import append_footer_if_missing
+from pipeline.ranking import rank_candidates
 from pipeline.rewrite import rewrite_news_item
 from pipeline.verify import verify_news_item
 from sources.keyword_filter import filter_by_keywords
@@ -48,8 +50,10 @@ logger = get_logger("pipeline")
 # Пауза между обращениями к LLM — бережём лимиты провайдера.
 PAUSE_BETWEEN_LLM_CALLS = 0.7
 
-# Сколько источников опрашиваем одновременно.
-SOURCE_FETCH_WORKERS = 6
+# Сколько источников опрашиваем одновременно. Источников стало около
+# сотни (81 лента МВД + СМИ + Telegram), и по шесть потоков обход
+# занимал бы минуты.
+SOURCE_FETCH_WORKERS = 16
 
 ProgressCallback = Callable[[str], None]
 
@@ -63,6 +67,12 @@ class CollectionStats:
     rejected: int = 0
     accepted: int = 0
     source_errors: list[str] = field(default_factory=list)
+    source_counts: dict[str, int] = field(default_factory=dict)
+    empty_sources: list[str] = field(default_factory=list)
+    mvd_collected: int = 0
+    media_collected: int = 0
+    telegram_collected: int = 0
+    llm_checks: int = 0
     reject_breakdown: dict[str, int] = field(default_factory=dict)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -73,6 +83,9 @@ class CollectionStats:
     def summary_lines(self) -> list[str]:
         lines = [
             f"📥 Собрано из источников: {self.raw_collected}",
+            f"      МВД: {self.mvd_collected} · "
+            f"Telegram: {self.telegram_collected} · СМИ: {self.media_collected}",
+            f"🔎 Проверено моделью: {self.llm_checks}",
             f"♻️ Пропущено как дубликаты: {self.duplicates}",
         ]
         if self.too_old:
@@ -82,8 +95,16 @@ class CollectionStats:
         lines.append(f"⏱ Заняло: {self.duration_seconds:.0f} сек.")
         if self.source_errors:
             lines.append("")
-            lines.append("⚠️ Источники с ошибками:")
-            lines.extend(f"   • {err}" for err in self.source_errors[:5])
+            lines.append(f"⚠️ Источники с ошибками: {len(self.source_errors)}")
+            lines.extend(f"   • {err}" for err in self.source_errors[:3])
+
+        # Пустой источник ошибки не даёт, но означает, что он недоступен
+        # или сменил вёрстку. Без этой строки поломка была незаметной:
+        # в сводке просто оказывалось подозрительно мало новостей.
+        if self.empty_sources:
+            lines.append("")
+            lines.append(f"🫙 Ничего не вернули: {len(self.empty_sources)}")
+            lines.extend(f"   • {name}" for name in self.empty_sources[:5])
         return lines
 
 
@@ -94,18 +115,26 @@ class CollectionStats:
 def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
     """
     Собирает новости со всех источников параллельно:
-      - RSS общих лент (РИА/ТАСС) — с keyword-фильтром, лента шумная;
-      - Telegram-каналов — без keyword-фильтра, они и так тематические,
-        LLM-проверка на этапе verify() сама отделит подвиги от сводок.
 
-    Ошибка в одном источнике не валит сбор по остальным.
+      - официальные ленты МВД (федеральная + территориальные) — главный
+        источник: именно там полиция публикует истории о спасениях,
+        и там же сразу известен регион;
+      - общие ленты СМИ — с keyword-фильтром, они шумные;
+      - публичные Telegram-каналы ведомств — без keyword-фильтра,
+        они и так тематические.
+
+    Ошибка в одном источнике не валит сбор по остальным: источник просто
+    попадает в stats.source_errors и его видно в сводке /fetch.
     """
     stats = stats or CollectionStats()
-    rss_items: list[RawNewsItem] = []
+    mvd_items: list[RawNewsItem] = []
+    media_items: list[RawNewsItem] = []
     telegram_items: list[RawNewsItem] = []
 
-    def fetch_rss(url: str) -> tuple[str, list[RawNewsItem]]:
-        return url, RSSSource(url).fetch(limit=settings.fetch_per_source)
+    def fetch_rss(url: str, label: str) -> tuple[str, list[RawNewsItem]]:
+        return label, RSSSource(url, source_name=label).fetch(
+            limit=settings.fetch_per_source
+        )
 
     def fetch_channel(name: str) -> tuple[str, list[RawNewsItem]]:
         return f"@{name}", TelegramChannelSource(name).fetch(
@@ -114,36 +143,55 @@ def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
 
     jobs: list = []
     with ThreadPoolExecutor(max_workers=SOURCE_FETCH_WORKERS) as pool:
+        if settings.mvd_rss_enabled:
+            for code in settings.mvd_rss_regions:
+                region = region_for_code(code) or f"регион {code}"
+                jobs.append((
+                    pool.submit(fetch_rss, f"https://{code}.мвд.рф/news/rss",
+                                f"МВД: {region}"),
+                    "mvd",
+                ))
+
         for url in settings.rss_sources:
-            jobs.append((pool.submit(fetch_rss, url), "rss"))
+            jobs.append((pool.submit(fetch_rss, url, RSSSource(url).source_name), "media"))
+
         for channel in settings.telegram_channels:
             jobs.append((pool.submit(fetch_channel, channel), "telegram"))
 
         for future, kind in jobs:
             try:
-                label, items = future.result(timeout=90)
+                label, items = future.result(timeout=120)
             except Exception as exc:
                 message = f"{kind}: {type(exc).__name__}: {exc}"
                 logger.warning("Источник недоступен — %s", message)
                 stats.source_errors.append(message)
                 continue
 
-            logger.info("Источник %s отдал %d записей", label, len(items))
-            if kind == "rss":
-                rss_items.extend(items)
+            stats.source_counts[label] = len(items)
+            if not items:
+                # Пустой источник — не ошибка, но и не норма: так
+                # выглядит заблокированный или сменивший вёрстку сайт.
+                stats.empty_sources.append(label)
+
+            if kind == "mvd":
+                mvd_items.extend(items)
+            elif kind == "media":
+                media_items.extend(items)
             else:
                 telegram_items.extend(items)
 
-    rss_filtered = filter_by_keywords(rss_items, settings.police_keywords)
+    media_filtered = filter_by_keywords(media_items, settings.police_keywords)
     logger.info(
-        "RSS: %d записей, после keyword-фильтра осталось %d",
-        len(rss_items), len(rss_filtered),
+        "Собрано: МВД %d, СМИ %d (после keyword-фильтра %d), Telegram %d",
+        len(mvd_items), len(media_items), len(media_filtered), len(telegram_items),
     )
 
-    # Telegram-каналы вперёд: это первоисточники, и если лимит выберется
-    # на них, мы не потеряем самое ценное ради пересказов из общих лент.
-    combined = telegram_items + rss_filtered
+    # Telegram-каналы и ленты МВД вперёд: это первоисточники.
+    combined = telegram_items + mvd_items + media_filtered
     stats.raw_collected = len(combined)
+    stats.mvd_collected = len(mvd_items)
+    stats.media_collected = len(media_filtered)
+    stats.telegram_collected = len(telegram_items)
     return combined
 
 
@@ -257,8 +305,14 @@ def run_collection_cycle(
     raw_items = collect_raw_news(stats)
     logger.info("Собрано сырых новостей: %d", len(raw_items))
 
+    # Сортируем по эвристике: спасения и помощь людям проверяются
+    # моделью первыми, служебные сводки — в последнюю очередь. Без этого
+    # лимит проверок уходил бы на отчёты о наркопритонах, а хорошие
+    # истории не успевали до него добраться.
+    raw_items = rank_candidates(raw_items)
+
     if progress:
-        progress(f"Собрано {len(raw_items)} записей, начинаю обработку...")
+        progress(f"Собрано {len(raw_items)} записей, отбираю лучшие...")
 
     pending: list[NewsItem] = []
     llm_calls = 0
@@ -266,6 +320,13 @@ def run_collection_cycle(
     for index, raw in enumerate(raw_items, 1):
         if len(pending) >= limit:
             logger.info("Достигнут лимит в %d постов — останавливаю обработку.", limit)
+            break
+
+        if llm_calls >= settings.max_llm_checks:
+            logger.info(
+                "Исчерпан лимит проверок моделью (%d) — остальные новости "
+                "останутся до следующего цикла.", settings.max_llm_checks,
+            )
             break
 
         try:
@@ -279,6 +340,8 @@ def run_collection_cycle(
         except Exception:
             logger.exception("Ошибка обработки новости из %s", raw.source_name)
             continue
+
+        stats.llm_checks = llm_calls
 
         if processed:
             pending.append(processed)
