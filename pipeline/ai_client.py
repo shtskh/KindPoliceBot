@@ -68,11 +68,19 @@ def get_client() -> httpx.Client:
     if _client is None:
         with _client_lock:
             if _client is None:
+                if settings.ai_insecure_tls:
+                    logger.warning(
+                        "AI_PROVIDER_INSECURE_TLS=true — сертификат провайдера "
+                        "НЕ проверяется. Это временная мера на случай "
+                        "протухшего сертификата; выключите её, как только "
+                        "провайдер обновит сертификат."
+                    )
                 _client = httpx.Client(
                     timeout=httpx.Timeout(settings.ai_timeout_seconds, connect=15.0),
                     limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
                     headers={"User-Agent": "KindPoliceBot/2.0"},
                     follow_redirects=True,
+                    verify=not settings.ai_insecure_tls,
                 )
     return _client
 
