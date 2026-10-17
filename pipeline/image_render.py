@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 from logging_setup import get_logger
-from paths import IMAGES_DIR, ensure_dirs
+from paths import FONTS_DIR, IMAGES_DIR, ensure_dirs
 
 logger = get_logger("card")
 
@@ -59,21 +59,33 @@ COLOR_BADGE_TEXT = (11, 26, 56)
 
 MARGIN = 88
 
-# Кандидаты шрифтов: сначала кириллические системные Windows/Linux,
-# в конце — дефолтный битмап Pillow (некрасивый, но не даёт упасть).
+# Кандидаты шрифтов.
+#
+# ПЕРВЫМ идёт шрифт, лежащий в самом репозитории (assets/fonts): это
+# единственный вариант, который работает везде одинаково. В Linux-образе
+# python:slim системных шрифтов нет вообще, и Pillow рисует вместо
+# русских букв пустые квадраты — именно так выглядели первые карточки
+# на хостинге. Установка пакета шрифтов в Dockerfile помогает только
+# если сборка идёт через этот Dockerfile, а автосборка хостинга его
+# игнорирует. Файл в репозитории от способа сборки не зависит.
+#
+# Дальше — системные шрифты (вдруг окажутся новее), в самом конце
+# дефолтный битмап Pillow: он без кириллицы, но не даёт упасть.
 _FONT_CANDIDATES_BOLD = [
+    str(FONTS_DIR / "DejaVuSans-Bold.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "C:/Windows/Fonts/segoeuib.ttf",
     "C:/Windows/Fonts/arialbd.ttf",
     "C:/Windows/Fonts/calibrib.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
 ]
 _FONT_CANDIDATES_REGULAR = [
+    str(FONTS_DIR / "DejaVuSans.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     "C:/Windows/Fonts/segoeui.ttf",
     "C:/Windows/Fonts/arial.ttf",
     "C:/Windows/Fonts/calibri.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 ]
 
 _font_cache: dict[tuple[str, int], "ImageFont.FreeTypeFont"] = {}
@@ -91,15 +103,44 @@ def _load_font(bold: bool, size: int):
     for candidate in candidates:
         try:
             font = ImageFont.truetype(candidate, size)
-            _font_cache[key] = font
-            return font
         except (OSError, ValueError):
             continue
 
-    logger.warning("Не найден TTF-шрифт с кириллицей, использую встроенный.")
+        # Мало найти шрифт — в нём должна быть кириллица. Шрифт без
+        # русских глифов рисует ряд пустых квадратов, и карточка уходит
+        # в канал нечитаемой, при этом никакой ошибки не возникает.
+        if not font_has_cyrillic(font):
+            logger.warning("Шрифт %s без кириллицы, пропускаю.", candidate)
+            continue
+
+        _font_cache[key] = font
+        return font
+
+    logger.error(
+        "Не найден ни один шрифт с кириллицей! Карточки будут нечитаемыми. "
+        "Проверьте, что файл assets/fonts/DejaVuSans.ttf попал в сборку."
+    )
     font = ImageFont.load_default()
     _font_cache[key] = font
     return font
+
+
+def font_has_cyrillic(font) -> bool:
+    """
+    Проверяет, что шрифт умеет рисовать русские буквы.
+
+    Сравниваем отрисовку буквы «Ж» с отрисовкой заведомо отсутствующего
+    символа: если картинки совпали, значит вместо буквы рисуется тот же
+    символ-заглушка, то есть кириллицы в шрифте нет.
+    """
+    try:
+        letter = font.getmask("Ж")
+        missing = font.getmask("￿")
+        if letter.size != missing.size:
+            return True
+        return bytes(letter) != bytes(missing)
+    except Exception:
+        return False
 
 
 def _vertical_gradient(width: int, height: int, top, bottom) -> "Image.Image":

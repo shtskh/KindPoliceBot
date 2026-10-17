@@ -294,7 +294,8 @@ def test_db() -> None:
 def test_images() -> None:
     from pipeline.image_pipeline import _scene_text, _sniff_extension
     from pipeline.image_render import (
-        CARD_RENDER_AVAILABLE, _format_place, _shorten_region, render_news_card,
+        CARD_RENDER_AVAILABLE, _format_place, _load_font, _shorten_region,
+        render_news_card,
     )
     from pipeline.post_formatting import append_footer_if_missing
     from storage.models import NewsItem
@@ -320,6 +321,24 @@ def test_images() -> None:
     check("подпись канала не попадает в текст картинки", "kindpolice" not in scene, scene)
     check("HTML-теги вырезаны", "<b>" not in scene and "<i>" not in scene, scene)
     check("суть сохранена", "спасли" in scene and "Казани" in scene, scene)
+
+    # Шрифт в репозитории — единственная защита от «тофу» на сервере:
+    # в python:slim системных шрифтов нет, и без этого файла карточки
+    # уходили в канал рядами пустых квадратов.
+    from paths import FONTS_DIR
+    from pipeline.image_render import font_has_cyrillic
+
+    bundled_bold = FONTS_DIR / "DejaVuSans-Bold.ttf"
+    bundled_regular = FONTS_DIR / "DejaVuSans.ttf"
+    check("шрифт лежит в репозитории", bundled_bold.is_file() and bundled_regular.is_file(),
+          str(FONTS_DIR))
+
+    if CARD_RENDER_AVAILABLE and bundled_bold.is_file():
+        from PIL import ImageFont
+        check("в шрифте есть кириллица",
+              font_has_cyrillic(ImageFont.truetype(str(bundled_bold), 40)))
+        check("шрифт выбирается из репозитория, а не системный",
+              str(FONTS_DIR) in str(getattr(_load_font(bold=True, size=40), "path", "")))
 
     check("длинный регион сокращается",
           _shorten_region("Ханты-Мансийский автономный округ — Югра") == "Югра")
