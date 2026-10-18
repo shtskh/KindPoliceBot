@@ -1360,6 +1360,7 @@ def _help_text(role: UserRole) -> str:
         "/pending — показать очередь модерации",
         "/stats — статистика работы бота",
         "/audience — статистика по пользователям бота",
+        "/sources — проверить доступность источников с сервера",
         "/schedule_status — статус автосбора",
         "",
         "<b>Общее</b>",
@@ -1609,6 +1610,25 @@ async def cmd_clear_confirm(message: Message):
         f"📦 Архивировано: {count}\n"
         f"📰 В очереди: 0"
     )
+
+
+@dp.message(Command("sources"))
+async def cmd_sources(message: Message):
+    """
+    Проверяет доступность источников С ЭТОГО СЕРВЕРА.
+
+    Нужна, когда сбор приносит пусто: локально источники отвечают, а с
+    зарубежного хостинга ведомственные сайты могут молчать, и со стороны
+    это выглядит как «бот сломался».
+    """
+    if not await _require_role(message, UserRole.MODERATOR):
+        return
+
+    status = await message.answer("🔌 Проверяю источники, это займёт полминуты...")
+    from pipeline.source_check import check_sources, format_report
+
+    statuses = await asyncio.to_thread(check_sources)
+    await _safe_edit(status, _fit_html(format_report(statuses), MESSAGE_LIMIT))
 
 
 @dp.message(Command("cleanup_images"))
