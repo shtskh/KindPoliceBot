@@ -270,7 +270,7 @@ class Settings:
     # Юзернеймы БЕЗ @. Это публичная информация (не секрет).
     channel_username: str = os.getenv("CHANNEL_USERNAME", "kindpolice")
     bot_username: str = os.getenv("BOT_USERNAME", "kindmvdbot")
-    channel_title: str = os.getenv("CHANNEL_TITLE", "Хороший полицейский")
+    channel_title: str = os.getenv("CHANNEL_TITLE", "Добрые новости о полиции")
 
     # --- Настройки публикации по умолчанию ---
     default_post_interval_minutes: int = _env_int("POST_INTERVAL_MINUTES", 120)

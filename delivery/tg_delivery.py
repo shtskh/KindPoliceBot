@@ -109,13 +109,27 @@ class TelegramDelivery(DeliveryChannel):
     # -- публичный интерфейс --------------------------------------------------
 
     def send_post_detailed(
-        self, text: str, image_path: str | None = None
+        self, text: str, image_path: str | None = None,
+        video_path: str | None = None,
     ) -> DeliveryResult:
         """
         Отправляет пост и возвращает подробный результат (id сообщения или
         текст ошибки) — бот показывает его модератору вместо «см. логи».
         """
         text = text or ""
+
+        # Видео показывает событие целиком, поэтому если ролик есть —
+        # отправляем его, а фотография остаётся запасным вариантом.
+        if video_path:
+            video = resolve(video_path)
+            if video.is_file():
+                result = self._send_video(text, video)
+                if result.ok:
+                    return result
+                logger.warning("Видео не ушло (%s) — пробую фото/текст.", result.error)
+            else:
+                logger.warning("Файл видео не найден: %s", video)
+
         resolved_image: Path | None = None
 
         if image_path:
@@ -137,6 +151,42 @@ class TelegramDelivery(DeliveryChannel):
             logger.warning("Не удалось отправить фото, публикую текстом: %s", result.error)
 
         return self._send_text(text)
+
+
+    def _send_video(self, text: str, video: Path) -> DeliveryResult:
+        caption = _safe_truncate_html(text, CAPTION_LIMIT)
+        try:
+            with open(video, "rb") as handle:
+                result = self._call(
+                    "sendVideo",
+                    {
+                        "chat_id": self.chat_id,
+                        "caption": caption,
+                        "parse_mode": "HTML",
+                        "supports_streaming": "true",
+                    },
+                    files={"video": handle},
+                )
+        except OSError as exc:
+            return DeliveryResult(ok=False, error=f"не удалось прочитать файл: {exc}")
+
+        if result.ok or "parse" not in result.error.lower():
+            return result
+
+        logger.warning("Проблема с HTML-разметкой видео, повторяю без неё.")
+        try:
+            with open(video, "rb") as handle:
+                return self._call(
+                    "sendVideo",
+                    {
+                        "chat_id": self.chat_id,
+                        "caption": _safe_truncate_html(strip_html(text), CAPTION_LIMIT),
+                        "supports_streaming": "true",
+                    },
+                    files={"video": handle},
+                )
+        except OSError as exc:
+            return DeliveryResult(ok=False, error=f"не удалось прочитать файл: {exc}")
 
     def _send_photo(self, text: str, image: Path) -> DeliveryResult:
         caption = _safe_truncate_html(text, CAPTION_LIMIT)
@@ -199,6 +249,7 @@ class TelegramDelivery(DeliveryChannel):
             },
         )
 
-    def send_post(self, text: str, image_path: str | None = None) -> bool:
+    def send_post(self, text: str, image_path: str | None = None,
+                  video_path: str | None = None) -> bool:
         """Совместимый со старым кодом булев интерфейс."""
-        return self.send_post_detailed(text, image_path).ok
+        return self.send_post_detailed(text, image_path, video_path).ok

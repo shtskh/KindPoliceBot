@@ -304,6 +304,8 @@ def build_moderation_text(item, *, compact: bool = False) -> str:
 
     # --- служебный блок ---
     footer: list[str] = ["➖➖➖➖➖"]
+    if item.video_path:
+        footer.append("🎬 видео из источника")
 
     image_label = _IMAGE_SOURCE_LABELS.get(item.image_source, item.image_source or "нет")
     footer.append(f"🖼 {image_label}")
@@ -364,8 +366,26 @@ async def send_item_to_moderators(item, chat_id: str | int | None = None) -> Non
 
     keyboard = moderation_keyboard(item.id, bool(item.image_path))
 
+    caption = _fit_html(build_moderation_text(item, compact=True), CAPTION_LIMIT)
+
+    # Видео показываем первым: модератор должен увидеть то же, что
+    # получит канал, а по кадру из ролика о нём не судить.
+    if item.video_path and image_pipeline.image_exists(item.video_path):
+        try:
+            await bot.send_video(
+                chat_id=target,
+                video=FSInputFile(resolve(item.video_path)),
+                caption=caption,
+                reply_markup=keyboard,
+                supports_streaming=True,
+            )
+            return
+        except Exception:
+            logger.warning(
+                "Не удалось отправить видео новости %s — пробую фото.", item.id
+            )
+
     if item.image_path and image_pipeline.image_exists(item.image_path):
-        caption = _fit_html(build_moderation_text(item, compact=True), CAPTION_LIMIT)
         try:
             await bot.send_photo(
                 chat_id=target,
@@ -1734,7 +1754,8 @@ async def on_approve(callback: CallbackQuery):
         chat_id=settings.publish_chat_id,
     )
     result = await asyncio.to_thread(
-        delivery.send_post_detailed, build_post_text(item), item.image_path
+        delivery.send_post_detailed, build_post_text(item), item.image_path,
+        item.video_path,
     )
 
     if result.ok:

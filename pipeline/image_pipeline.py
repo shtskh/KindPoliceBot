@@ -47,6 +47,7 @@ from logging_setup import get_logger
 from paths import IMAGES_DIR, ensure_dirs, resolve, to_relative
 from pipeline.ai_client import AIProviderError, post_json
 from pipeline.image_render import CARD_RENDER_AVAILABLE, render_news_card
+from pipeline.media_extract import extract_from_page, upgrade_image_url
 from storage.models import NewsItem
 
 logger = get_logger("image")
@@ -121,10 +122,14 @@ def get_image_for_item(
     if force_card:
         return _render_card(item, notes="Принудительный рендер карточки")
 
-    if allow_original and raw_image_url:
-        downloaded = _try_download(raw_image_url)
-        if downloaded:
-            return ImageResult(path=downloaded, source="original")
+    if allow_original:
+        # Сначала страница новости: там снимки лежат в полном размере,
+        # тогда как в ленте бывает только уменьшенное превью (а у лент
+        # МВД картинок нет вовсе).
+        for candidate in _high_quality_candidates(item, raw_image_url):
+            downloaded = _try_download(candidate)
+            if downloaded:
+                return ImageResult(path=downloaded, source="original")
         logger.info("Фото из источника не подошло, пробую другие варианты.")
 
     scene = _scene_text(item)
@@ -145,6 +150,32 @@ def get_image_for_item(
 
     return ImageResult(path=None, source="none", notes="Изображение не получено.")
 
+
+
+def _high_quality_candidates(item: NewsItem, raw_image_url: str | None) -> list[str]:
+    """
+    Адреса снимков по убыванию качества.
+
+    Порядок важен: сначала оригиналы со страницы новости, затем то, что
+    дал сам источник. У лент МВД картинки в RSS отсутствуют, а на
+    странице лежат полноразмерные снимки — без этого шага такие новости
+    всегда уходили с нарисованной карточкой.
+    """
+    candidates: list[str] = []
+
+    if item.source_url:
+        media = extract_from_page(item.source_url)
+        candidates.extend(media.images[:3])
+
+    if raw_image_url:
+        # Превью из ленты тоже пробуем повысить до оригинала.
+        upgraded = upgrade_image_url(raw_image_url)
+        if upgraded != raw_image_url:
+            candidates.append(upgraded)
+        candidates.append(raw_image_url)
+
+    # Сохраняем порядок, убирая повторы.
+    return list(dict.fromkeys(c for c in candidates if c))
 
 def _render_card(item: NewsItem, notes: str = "") -> ImageResult:
     if not CARD_RENDER_AVAILABLE:
@@ -563,3 +594,79 @@ def generation_status() -> str:
     if _remote_generation_available is True:
         return "работает"
     return "ещё не проверялась в этом запуске"
+
+
+# --------------------------------------------------------------------------
+# Видео
+# --------------------------------------------------------------------------
+
+# Telegram принимает видео до 50 МБ при загрузке файлом. Берём запас:
+# ролик тяжелее этого почти наверняка длинный репортаж, а не короткая
+# запись спасения, ради которой всё и затевалось.
+MAX_VIDEO_BYTES = 45_000_000
+
+
+
+def download_video(url: str | None) -> str | None:
+    """
+    Скачивает ролик из источника. Возвращает путь или None.
+
+    Видео не обязательное: если его не удалось получить, пост уйдёт
+    с фотографией или карточкой, как раньше.
+    """
+    if not url or not url.startswith(("http://", "https://")):
+        return None
+
+    ensure_dirs()
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:20]
+    path = IMAGES_DIR / f"vid_{digest}.mp4"
+
+    if path.is_file() and path.stat().st_size > 10_000:
+        return to_relative(path)
+
+    try:
+        response = requests.get(
+            url, timeout=60,
+            headers={"User-Agent": DOWNLOAD_USER_AGENT},
+            stream=True,
+        )
+        response.raise_for_status()
+
+        content_type = response.headers.get("Content-Type", "").lower()
+        if content_type and not content_type.startswith(("video/", "application/octet")):
+            logger.info("По ссылке не видео (%s): %s", content_type, url[:90])
+            return None
+
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_content(256 * 1024):
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_VIDEO_BYTES:
+                logger.info("Ролик больше %d МБ — пропускаю: %s",
+                            MAX_VIDEO_BYTES // 1_000_000, url[:90])
+                return None
+        content = b"".join(chunks)
+
+    except requests.RequestException as exc:
+        logger.info("Не удалось скачать видео %s: %s", url[:90], exc)
+        return None
+
+    if len(content) < 10_000:
+        logger.info("Ролик подозрительно маленький (%d байт), пропускаю.", len(content))
+        return None
+
+    # Убеждаемся, что это действительно медиафайл, а не страница ошибки.
+    head = content[:64].lstrip().lower()
+    if any(head.startswith(marker) for marker in _HTML_SNIFF):
+        logger.info("Вместо видео пришла HTML-страница, пропускаю.")
+        return None
+
+    try:
+        path.write_bytes(content)
+    except OSError as exc:
+        logger.warning("Не удалось сохранить видео: %s", exc)
+        return None
+
+    logger.info("Видео сохранено: %s (%d МБ)", path.name, len(content) // 1_000_000)
+    return to_relative(path)

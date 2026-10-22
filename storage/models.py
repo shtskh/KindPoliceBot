@@ -29,6 +29,10 @@ class RawNewsItem:
     raw_text: str
     published_at: datetime
     image_url: str | None = None
+    # Прямая ссылка на видеоролик, если он есть в источнике.
+    # Официальные каналы ведомств часто публикуют спасения именно
+    # видео, и текстовый пересказ теряет самое ценное.
+    video_url: str | None = None
 
 
 @dataclass
@@ -48,6 +52,9 @@ class NewsItem:
     rewritten_text: str | None = None
     image_path: str | None = None
     image_source: str | None = None  # "original" | "generated"
+    # Локальный путь к скачанному видео и его длительность в секундах.
+    video_path: str | None = None
+    video_duration: int | None = None
 
     verification_notes: str = ""
     rejection_reason: str | None = None

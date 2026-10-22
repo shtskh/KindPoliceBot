@@ -18,7 +18,8 @@ def build_footer() -> str:
     links = []
     if settings.channel_username:
         links.append(
-            f'<a href="https://t.me/{settings.channel_username}">Хороший полицейский</a>'
+            f'<a href="https://t.me/{settings.channel_username}">'
+            f'{settings.channel_title}</a>'
         )
     if settings.bot_username:
         links.append(f'<a href="https://t.me/{settings.bot_username}">Бот</a>')

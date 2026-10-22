@@ -106,6 +106,7 @@ class TelegramChannelSource:
                     raw_text=text,
                     published_at=self._extract_date(block),
                     image_url=self._extract_image_url(block),
+                    video_url=self._extract_video_url(block),
                 ))
             except Exception:
                 logger.exception("Не удалось разобрать пост канала @%s",
@@ -147,6 +148,25 @@ class TelegramChannelSource:
             except ValueError:
                 pass
         return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _extract_video_url(block) -> str | None:
+        """
+        Прямая ссылка на mp4, если пост — видео.
+
+        У публичной страницы канала ролик лежит обычным тегом <video>
+        с готовым адресом файла. Длинные ролики Telegram отдаёт
+        фрагментами, но короткие (а спасения почти всегда короткие)
+        доступны целиком.
+        """
+        video = block.select_one("video.tgme_widget_message_video")
+        if video is None:
+            video = block.select_one("video")
+        if video is None:
+            return None
+
+        src = (video.get("src") or "").strip()
+        return src if src.startswith("http") else None
 
     @staticmethod
     def _extract_image_url(block) -> str | None:

@@ -703,11 +703,66 @@ def test_ranking() -> None:
     check("пустая новость не роняет оценку", isinstance(score_item(item("", "")), int))
 
 
+# ==========================================================================
+# 13. Медиа: качество фото и видео из источника
+# ==========================================================================
+
+def test_media() -> None:
+    from pipeline.media_extract import PageMedia, extract_from_page, upgrade_image_url
+
+    section("Медиа из источника")
+
+    # Главное: адрес уменьшенной копии превращается в адрес оригинала.
+    # На сайтах МВД снимки лежат как `IMG-800x600.jpg`, а оригинал —
+    # тот же адрес без суффикса (проверено: 1280x960 против 800x600).
+    check("суффикс размера убирается",
+          upgrade_image_url("https://x/IMG_1-800x600.jpg") == "https://x/IMG_1.jpg")
+    # Часть региональных сайтов пишет размер с удвоенной «x».
+    check("вариант с двойной x тоже убирается",
+          upgrade_image_url("https://x/IMG_1-800xx600.jpg") == "https://x/IMG_1.jpg")
+    check("адрес без суффикса не портится",
+          upgrade_image_url("https://x/photo.jpg") == "https://x/photo.jpg")
+    check("размер внутри имени не трогается",
+          upgrade_image_url("https://x/800x600_foto.jpg") == "https://x/800x600_foto.jpg")
+
+    # Без сети модуль обязан молчать, а не падать: медиа не повод терять
+    # новость целиком.
+    check("пустой адрес не роняет", extract_from_page("").images == [])
+    check("не-URL не роняет", extract_from_page("не ссылка").video is None)
+
+    media = PageMedia(images=["a.jpg", "b.jpg"])
+    check("лучшее фото — первое", media.best_image == "a.jpg")
+    check("без фото best_image пуст", PageMedia().best_image is None)
+
+    # Служебная графика не должна попадать в пост вместо фотографии.
+    from pipeline.media_extract import _is_decorative
+    for decor in ("https://static.mvd.ru/upload/site1/coat_of_arms.svg",
+                  "https://x/GU_MVD_emblemy_vektor.png",
+                  "https://x/Geraldika_MVD.png",
+                  "https://x/logo.png"):
+        check(f"отсеивается: {decor.split('/')[-1][:28]}", _is_decorative(decor))
+    check("обычный снимок не отсеивается",
+          not _is_decorative("https://static.mvd.ru/upload/site29/document_images/IMG_1.jpg"))
+
+
+def test_footer_title() -> None:
+    from config import settings
+    from pipeline.post_formatting import build_footer
+
+    section("Название канала в подписи")
+
+    footer = build_footer()
+    check("в подписи новое название", settings.channel_title in footer, footer)
+    # Раньше название было зашито в код и настройку игнорировало.
+    check("старое название исчезло", "Хороший полицейский" not in footer, footer)
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
         test_images, test_delivery, test_sources, test_seed, test_ai_client,
         test_assistant, test_audience_and_content, test_ranking,
+        test_media, test_footer_title,
     )
 
     for test in tests:

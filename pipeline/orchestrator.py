@@ -32,7 +32,8 @@ from typing import Callable
 from config import settings
 from content.regions import region_for_code
 from logging_setup import get_logger
-from pipeline.image_pipeline import get_image_for_item
+from pipeline.image_pipeline import download_video, get_image_for_item
+from pipeline.media_extract import extract_from_page
 from pipeline.post_formatting import append_footer_if_missing
 from pipeline.ranking import rank_candidates
 from pipeline.rewrite import rewrite_news_item
@@ -213,6 +214,37 @@ def _is_too_old(raw: RawNewsItem) -> bool:
 # Обработка одной новости
 # --------------------------------------------------------------------------
 
+# Короче этого текст новости считается «только заголовком»: ленты МВД
+# отдают в RSS пустой summary, и без догрузки страницы и модель, и
+# дедупликация работали по одной строке.
+MIN_TEXT_FOR_LLM = 200
+
+
+def enrich_from_page(raw: RawNewsItem) -> RawNewsItem:
+    """
+    Догружает со страницы новости то, чего не было в ленте: полный
+    текст, снимки в оригинальном размере и видео.
+
+    Вызывается ТОЛЬКО для отобранных кандидатов, уже после сортировки:
+    делать запрос за каждой из полутора тысяч новостей было бы долго и
+    невежливо по отношению к сайтам источников.
+    """
+    needs_text = len(raw.raw_text or "") < MIN_TEXT_FOR_LLM
+    if not needs_text and raw.image_url and raw.video_url:
+        return raw
+
+    media = extract_from_page(raw.source_url)
+
+    if needs_text and media.text:
+        raw.raw_text = media.text
+    if not raw.image_url and media.images:
+        raw.image_url = media.images[0]
+    if not raw.video_url and media.video:
+        raw.video_url = media.video
+
+    return raw
+
+
 def process_raw_item(raw: RawNewsItem, stats: CollectionStats | None = None) -> NewsItem | None:
     """
     Прогоняет одну сырую новость: верификация -> рерайт -> изображение.
@@ -229,6 +261,17 @@ def process_raw_item(raw: RawNewsItem, stats: CollectionStats | None = None) -> 
         return None
     if _is_too_old(raw):
         stats.too_old += 1
+        return None
+
+    # Догружаем страницу ДО проверки моделью: иначе она судит о новости
+    # по одному заголовку, а рерайт пересказывает заголовок заголовком.
+    raw = enrich_from_page(raw)
+
+    # Дубликат мог не определиться по пустому тексту из ленты — после
+    # догрузки проверяем ещё раз: одна и та же новость приходит и в
+    # федеральную ленту МВД, и в региональную.
+    if db.similar_item_exists(settings.db_path, raw.raw_text):
+        stats.duplicates += 1
         return None
 
     item = NewsItem(
@@ -266,6 +309,11 @@ def process_raw_item(raw: RawNewsItem, stats: CollectionStats | None = None) -> 
     # канала. Иначе футер со ссылками попадает и в промпт, и на карточку.
     item.rewritten_text = rewrite_news_item(item)
     item.status = NewsStatus.REWRITTEN
+
+    # Видео важнее фотографии: ролик со спасением показывает событие
+    # целиком, тогда как кадр из него — лишь момент. Картинку всё равно
+    # готовим: она пойдёт в превью и пригодится, если видео не дойдёт.
+    item.video_path = download_video(raw.video_url)
 
     image_result = get_image_for_item(item, raw_image_url=raw.image_url)
     item.image_path = image_result.path

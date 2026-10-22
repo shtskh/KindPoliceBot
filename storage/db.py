@@ -145,6 +145,8 @@ MIGRATIONS = (
     ("news_items", "moderated_by", "INTEGER"),
     ("news_items", "moderated_at", "TEXT"),
     ("news_items", "published_message_id", "INTEGER"),
+    ("news_items", "video_path", "TEXT"),
+    ("news_items", "video_duration", "INTEGER"),
     ("public_resources", "sort_order", "INTEGER"),
 )
 
@@ -304,18 +306,19 @@ def save_item(db_path: str, item: NewsItem):
             INSERT INTO news_items (id, source_name, source_url, title, raw_text,
                 published_at, status, region, city, rewritten_text, image_path,
                 image_source, verification_notes, rejection_reason, tags,
-                fingerprint, reject_code, created_at)
+                fingerprint, reject_code, created_at, video_path, video_duration)
             VALUES (:id, :source_name, :source_url, :title, :raw_text,
                 :published_at, :status, :region, :city, :rewritten_text, :image_path,
                 :image_source, :verification_notes, :rejection_reason, :tags,
-                :fingerprint, :reject_code, :created_at)
+                :fingerprint, :reject_code, :created_at, :video_path, :video_duration)
             ON CONFLICT(id) DO UPDATE SET
                 status=excluded.status, region=excluded.region, city=excluded.city,
                 rewritten_text=excluded.rewritten_text, image_path=excluded.image_path,
                 image_source=excluded.image_source,
                 verification_notes=excluded.verification_notes,
                 rejection_reason=excluded.rejection_reason, tags=excluded.tags,
-                fingerprint=excluded.fingerprint, reject_code=excluded.reject_code
+                fingerprint=excluded.fingerprint, reject_code=excluded.reject_code,
+                video_path=excluded.video_path, video_duration=excluded.video_duration
         """, data)
 
 
@@ -605,6 +608,8 @@ def _row_to_item(row: sqlite3.Row) -> NewsItem:
         reject_code=_row_value(row, "reject_code"),
         moderated_by=_row_value(row, "moderated_by"),
         published_message_id=_row_value(row, "published_message_id"),
+        video_path=_row_value(row, "video_path"),
+        video_duration=_row_value(row, "video_duration"),
     )
 
 
