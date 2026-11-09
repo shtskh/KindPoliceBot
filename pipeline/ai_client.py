@@ -94,9 +94,9 @@ def close_client() -> None:
             _client = None
 
 
-def _auth_headers() -> dict[str, str]:
+def _auth_headers(api_key: str | None = None) -> dict[str, str]:
     return {
-        "Authorization": f"Bearer {settings.ai_api_key}",
+        "Authorization": f"Bearer {api_key or settings.ai_api_key}",
         "Content-Type": "application/json",
     }
 
@@ -119,15 +119,23 @@ def post_json(
     timeout: float | None = None,
     max_retries: int | None = None,
     label: str = "request",
+    base_url: str | None = None,
+    api_key: str | None = None,
 ) -> dict:
     """
-    POST на {ai_base_url}{path} с ретраями. Возвращает разобранный JSON.
+    POST на {base_url}{path} с ретраями. Возвращает разобранный JSON.
     Бросает AIProviderError с понятным текстом при любой неудаче.
-    """
-    if not settings.ai_configured:
-        raise AIProviderError("AI_PROVIDER_API_KEY не задан")
 
-    url = f"{settings.ai_base_url}{path}"
+    base_url и api_key позволяют обратиться к ДРУГОМУ сервису тем же
+    клиентом: картинки обычно рисует не тот провайдер, что отвечает за
+    текст (у текстовых прокси эндпоинта /images/generations попросту
+    нет). По умолчанию берутся основные настройки.
+    """
+    key = api_key or settings.ai_api_key
+    if not key:
+        raise AIProviderError("API-ключ не задан")
+
+    url = f"{(base_url or settings.ai_base_url).rstrip('/')}{path}"
     attempts = max_retries if max_retries is not None else settings.ai_max_retries
     attempts = max(1, attempts)
     client = get_client()
@@ -139,7 +147,7 @@ def post_json(
         try:
             response = client.post(
                 url,
-                headers=_auth_headers(),
+                headers=_auth_headers(key),
                 json=payload,
                 timeout=timeout or settings.ai_timeout_seconds,
             )

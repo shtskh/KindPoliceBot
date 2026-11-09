@@ -112,28 +112,49 @@ class Settings:
     ai_max_retries: int = _env_int("AI_MAX_RETRIES", 3)
 
     # --- Генерация изображений ---
-    # ВАЖНО (проверено запросом к провайдеру): у aiprovider.duckdns.org
-    # эндпоинта /images/generations НЕТ — он отвечает 404 "Endpoint not
-    # found" на любой модели, и в /v1/models нет ни одной image-модели.
-    # Поэтому единственный надёжный источник картинки, когда в новости
-    # нет своего фото, — локальный рендер карточки (pipeline/image_render.py).
-    # Настройки ниже оставлены, чтобы удалённая генерация включилась
-    # автоматически, как только провайдер добавит эндпоинт.
+    #
+    # Сервис картинок задаётся ОТДЕЛЬНО от текстового: у текстовых
+    # прокси (и у baza-ai, и у прежнего duckdns) эндпоинта
+    # /images/generations нет вовсе — проверено, отвечает 404 на любой
+    # модели. Поэтому ключ и адрес для картинок свои.
+    #
+    # Подходит любой сервис с OpenAI-совместимым /images/generations.
+    # Если IMAGE_API_KEY не задан, берётся основной ключ — это рабочий
+    # вариант, когда один провайдер умеет и текст, и картинки.
     image_generation_enabled: bool = _env_bool("IMAGE_GENERATION_ENABLED", True)
+    image_api_base: str = os.getenv(
+        "IMAGE_API_BASE", "https://api.openai.com/v1"
+    ).rstrip("/")
+    image_api_key_raw: str = os.getenv("IMAGE_API_KEY", "")
     ai_image_endpoint: str = os.getenv(
         "AI_PROVIDER_IMAGE_ENDPOINT", "/images/generations"
     )
-    # Несколько кандидатов: провайдеры называют модели по-разному, а
-    # угадать с первого раза нельзя. Перебираем по очереди.
+    # Несколько кандидатов подряд: провайдеры называют модели по-разному,
+    # а модели OpenAI быстро сменяют друг друга (gpt-image-1 закрыта
+    # 23.10.2026). Перебор избавляет от правки кода при каждой смене.
     ai_image_models: list[str] = field(
         default_factory=lambda: _parse_str_list(
             os.getenv("AI_PROVIDER_IMAGE_MODELS", ""),
-            ["gpt-image-1", "dall-e-3", "flux.1-schnell", "stable-diffusion-3.5"],
+            [
+                "gpt-image-2.5-flare",
+                "gpt-image-2.5-sunburst",
+                "gpt-image-2.6-flare",
+                "dall-e-3",
+                "flux.1-schnell",
+            ],
         )
     )
     ai_image_size: str = os.getenv("AI_PROVIDER_IMAGE_SIZE", "1024x1024")
-    # Рисовать красивую карточку, если фото нет и удалённая генерация
-    # недоступна. Это гарантирует, что у КАЖДОГО поста будет изображение.
+    # low | medium | high — выше качество, дороже и дольше.
+    ai_image_quality: str = os.getenv("AI_PROVIDER_IMAGE_QUALITY", "medium")
+    # Надпись на сгенерированной картинке. Пустая строка отключает её,
+    # но для ведомственной темы это плохая идея: без пометки рисунок
+    # выглядит как фотография с места события.
+    ai_image_label: str = os.getenv(
+        "AI_IMAGE_LABEL", "Иллюстрация · сгенерировано ИИ"
+    )
+    # Рисовать фирменную карточку, если фото нет и генерация не удалась.
+    # Это гарантирует, что у КАЖДОГО поста будет изображение.
     image_card_fallback: bool = _env_bool("IMAGE_CARD_FALLBACK", True)
 
     # --- ИИ-помощник для обычных пользователей ---
@@ -279,6 +300,15 @@ class Settings:
     # --- Логирование ---
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
     log_to_file: bool = _env_bool("LOG_TO_FILE", True)
+
+    @property
+    def image_api_key(self) -> str:
+        """Ключ сервиса картинок; если свой не задан — основной."""
+        return self.image_api_key_raw or self.ai_api_key
+
+    @property
+    def image_generation_configured(self) -> bool:
+        return bool(self.image_generation_enabled and self.image_api_key)
 
     @property
     def verify_model(self) -> str:

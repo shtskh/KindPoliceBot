@@ -757,12 +757,125 @@ def test_footer_title() -> None:
     check("старое название исчезло", "Хороший полицейский" not in footer, footer)
 
 
+# ==========================================================================
+# 14. Генерация иллюстраций
+# ==========================================================================
+
+def test_image_generation() -> None:
+    import base64
+    from datetime import datetime, timezone
+    from io import BytesIO
+
+    import pipeline.image_pipeline as ip
+    from config import settings
+    from pipeline.image_prompt import PROMPT_SUFFIX, _clean, build_image_prompt
+    from pipeline.image_render import CARD_RENDER_AVAILABLE, add_ai_label
+    from storage.models import NewsItem
+
+    section("Генерация иллюстраций")
+
+    # --- промпт ---
+    check("лишние пробелы и кавычки убираются",
+          _clean('  "a quiet  courtyard"  ') == "a quiet courtyard")
+    check("слишком длинный промпт обрезается", len(_clean("word " * 500)) <= 900)
+
+    item = NewsItem(
+        id="1", source_name="МВД", source_url="https://x", title="Спасли ребёнка",
+        raw_text="Полицейские вынесли ребёнка из горящего дома." * 3,
+        published_at=datetime(2026, 1, 15, tzinfo=timezone.utc),
+        region="Тверская область",
+    )
+
+    # Без ключа промпт всё равно собирается — из запасного шаблона,
+    # и в нём обязаны остаться ограничения.
+    saved_key = settings.ai_api_key
+    settings.ai_api_key = ""
+    offline = build_image_prompt(item)
+    settings.ai_api_key = saved_key
+
+    check("без ключа есть запасной промпт", bool(offline))
+    check("в запасном промпте учтено время года", "winter" in (offline or ""))
+    for ban in ("No recognizable faces", "No text", "no insignia", "No blood"):
+        check(f"запрет сохранён: {ban[:22]}", ban in PROMPT_SUFFIX)
+
+    # Пустая новость иллюстрироваться не может.
+    empty = NewsItem(id="2", source_name="x", source_url="", title="",
+                     raw_text="", published_at=datetime.now(timezone.utc))
+    check("пустая новость -> промпта нет", build_image_prompt(empty) is None)
+
+    # --- пометка на изображении ---
+    if CARD_RENDER_AVAILABLE:
+        from PIL import Image
+
+        handle, path = tempfile.mkstemp(suffix=".jpg")
+        os.close(handle)
+        try:
+            Image.new("RGB", (600, 600), (200, 200, 200)).save(path, "JPEG")
+            corner_before = Image.open(path).crop((330, 540, 590, 590)).tobytes()
+
+            check("пометка ставится", add_ai_label(path, "Иллюстрация · ИИ"))
+
+            corner_after = Image.open(path).crop((330, 540, 590, 590)).tobytes()
+            # Без этого «пометка поставлена» могло бы означать, что
+            # функция отработала, ничего не нарисовав.
+            check("угол изображения изменился", corner_before != corner_after)
+            check("пустая подпись ничего не рисует",
+                  not add_ai_label(path, ""))
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    # --- запрос к сервису картинок ---
+    if not CARD_RENDER_AVAILABLE:
+        return
+
+    from PIL import Image
+
+    # Картинка должна быть достаточно крупной: _store_image_bytes
+    # отбраковывает всё мелкое как заглушку или ошибку сервиса.
+    # Шум нужен, чтобы JPEG не сжался до пары килобайт.
+    noise = Image.frombytes(
+        "RGB", (700, 700), os.urandom(700 * 700 * 3)
+    )
+    buffer = BytesIO()
+    noise.save(buffer, "JPEG", quality=92)
+    payload_seen: dict = {}
+
+    def fake_post(path, payload, **kwargs):
+        payload_seen.update(payload)
+        payload_seen["_base"] = kwargs.get("base_url")
+        return {"data": [{"b64_json": base64.b64encode(buffer.getvalue()).decode()}]}
+
+    real_post, real_key = ip.post_json, settings.image_api_key_raw
+    ip.post_json, settings.image_api_key_raw = fake_post, "sk-test"
+    ip._remote_generation_available = None
+    try:
+        generated, error = ip._generate_image_remote("a quiet courtyard")
+    finally:
+        ip.post_json, settings.image_api_key_raw = real_post, real_key
+
+    check("изображение сохраняется", generated is not None, str(error))
+    # gpt-image отклоняет response_format: он всегда отдаёт base64.
+    check("response_format не отправляется", "response_format" not in payload_seen)
+    check("качество передаётся", payload_seen.get("quality") == settings.ai_image_quality)
+    check("используется адрес сервиса картинок",
+          payload_seen.get("_base") == settings.image_api_base)
+
+    # Ключ картинок отдельный, но откатывается на основной.
+    settings.image_api_key_raw = ""
+    check("ключ наследуется от основного",
+          settings.image_api_key == settings.ai_api_key)
+    settings.image_api_key_raw = real_key
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
         test_images, test_delivery, test_sources, test_seed, test_ai_client,
         test_assistant, test_audience_and_content, test_ranking,
-        test_media, test_footer_title,
+        test_media, test_footer_title, test_image_generation,
     )
 
     for test in tests:

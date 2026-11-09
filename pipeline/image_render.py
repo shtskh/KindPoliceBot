@@ -530,3 +530,62 @@ def render_news_card(
         # Оформление не должно ронять пайплайн — логируем и идём дальше.
         logger.exception("Не удалось нарисовать карточку")
         return None
+
+
+def add_ai_label(image_path: str | Path, text: str) -> bool:
+    """
+    Ставит на изображение пометку о том, что оно нарисовано ИИ.
+
+    Зачем: сгенерированный кадр выглядит как документальная съёмка, и
+    без пометки читатель примет его за фотографию с места события. Для
+    новостей о работе полиции это недопустимо — событие реальное, а
+    изображение нет.
+
+    Плашка полупрозрачная и в нижнем углу: читается, но не спорит с
+    самим кадром. Возвращает True, если пометка поставлена.
+    """
+    if not CARD_RENDER_AVAILABLE or not text:
+        return False
+
+    path = Path(image_path)
+    if not path.is_file():
+        return False
+
+    try:
+        with Image.open(path) as source:
+            image = source.convert("RGB")
+
+        draw = ImageDraw.Draw(image, "RGBA")
+        # Кегль от ширины кадра: на 512 и на 1536 пометка должна
+        # выглядеть одинаково уместно.
+        size = max(14, int(image.width * 0.022))
+        font = _load_font(bold=False, size=size)
+
+        padding = max(8, size // 2)
+        margin = max(10, size // 2)
+        text_width = draw.textlength(text, font=font)
+        bbox = font.getbbox(text)
+        text_height = bbox[3] - bbox[1]
+
+        box_width = text_width + padding * 2
+        box_height = text_height + padding * 2
+        left = image.width - box_width - margin
+        top = image.height - box_height - margin
+
+        draw.rounded_rectangle(
+            [left, top, left + box_width, top + box_height],
+            radius=max(4, size // 3),
+            fill=(0, 0, 0, 150),
+        )
+        draw.text(
+            (left + padding, top + padding - bbox[1]),
+            text, font=font, fill=(255, 255, 255, 235),
+        )
+
+        image.save(path, format="JPEG", quality=92, optimize=True)
+        logger.info("На изображение поставлена пометка об ИИ: %s", path.name)
+        return True
+
+    except Exception:
+        logger.exception("Не удалось поставить пометку на изображение")
+        return False

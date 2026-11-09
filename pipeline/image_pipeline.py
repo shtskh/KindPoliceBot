@@ -46,7 +46,12 @@ from config import settings
 from logging_setup import get_logger
 from paths import IMAGES_DIR, ensure_dirs, resolve, to_relative
 from pipeline.ai_client import AIProviderError, post_json
-from pipeline.image_render import CARD_RENDER_AVAILABLE, render_news_card
+from pipeline.image_prompt import build_image_prompt
+from pipeline.image_render import (
+    CARD_RENDER_AVAILABLE,
+    add_ai_label,
+    render_news_card,
+)
 from pipeline.media_extract import extract_from_page, upgrade_image_url
 from storage.models import NewsItem
 
@@ -68,11 +73,6 @@ DOWNLOAD_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
 )
 
-IMAGE_GENERATION_PROMPT_TEMPLATE = """Documentary-style realistic photograph:
-a Russian police officer in regulation uniform (accurate insignia, no distortions),
-scene: {scene_description}.
-Neutral, calm, professional framing. No close-up recognizable faces,
-no text, no logos, no watermarks on the image."""
 
 # Признаки того, что провайдер отдал HTML-страницу ошибки вместо картинки.
 _HTML_SNIFF = (b"<!doctype", b"<html", b"<?xml")
@@ -138,12 +138,20 @@ def get_image_for_item(
             path=None, source="none", notes="Нет текста для составления промпта."
         )
 
-    if settings.image_generation_enabled:
-        generated, error = _generate_image_remote(scene)
-        if generated:
-            return ImageResult(path=generated, source="generated")
-        if error:
-            logger.info("Удалённая генерация недоступна: %s", error)
+    if settings.image_generation_configured:
+        # Кадр придумывает языковая модель по тексту новости: прямая
+        # подстановка новости в генератор даёт бессмысленную картинку,
+        # потому что новость написана про процессуальные действия, а
+        # генератор рисует по визуальному описанию.
+        prompt = build_image_prompt(item)
+        if prompt:
+            generated, error = _generate_image_remote(prompt)
+            if generated:
+                return ImageResult(path=generated, source="generated")
+            if error:
+                logger.info("Генерация не удалась: %s", error)
+        else:
+            logger.info("Иллюстрировать нечего — рисую карточку.")
 
     if settings.image_card_fallback:
         return _render_card(item)
@@ -290,9 +298,13 @@ def _try_download(url: str) -> str | None:
 # Удалённая генерация
 # --------------------------------------------------------------------------
 
-def _generate_image_remote(scene: str) -> tuple[str | None, str | None]:
+def _generate_image_remote(prompt: str) -> tuple[str | None, str | None]:
     """
-    Пытается сгенерировать картинку через AI Provider.
+    Рисует иллюстрацию по готовому описанию кадра.
+
+    Описание сочиняет языковая модель (pipeline/image_prompt.py), сюда
+    приходит уже визуальный промпт на английском.
+
     Возвращает (путь, текст_ошибки) — ровно одно из двух не None.
     """
     global _remote_generation_available, _remote_generation_reason
@@ -300,20 +312,23 @@ def _generate_image_remote(scene: str) -> tuple[str | None, str | None]:
     if _remote_generation_available is False:
         return None, _remote_generation_reason
 
-    if not settings.ai_configured:
-        return None, "AI_PROVIDER_API_KEY не задан"
+    if not settings.image_generation_configured:
+        return None, "IMAGE_API_KEY не задан"
 
-    prompt = IMAGE_GENERATION_PROMPT_TEMPLATE.format(scene_description=scene[:400])
     last_error = "не удалось сгенерировать изображение"
 
     for model in settings.ai_image_models:
-        payload = {
+        payload: dict = {
             "model": model,
             "prompt": prompt,
             "n": 1,
             "size": settings.ai_image_size,
-            "response_format": "b64_json",
         }
+        # response_format тут НЕ передаём: линейка gpt-image всегда
+        # отдаёт base64 и отклоняет этот параметр с ошибкой. Старые
+        # модели (dall-e-3) base64 отдают и без него.
+        if settings.ai_image_quality and not model.startswith("dall-e"):
+            payload["quality"] = settings.ai_image_quality
 
         try:
             data = post_json(
@@ -321,8 +336,10 @@ def _generate_image_remote(scene: str) -> tuple[str | None, str | None]:
                 payload,
                 label=f"image:{model}",
                 # Генерация долгая, но и ретраить её дорого.
-                timeout=180.0,
+                timeout=240.0,
                 max_retries=2,
+                base_url=settings.image_api_base,
+                api_key=settings.image_api_key,
             )
         except AIProviderError as exc:
             last_error = str(exc)
@@ -332,8 +349,9 @@ def _generate_image_remote(scene: str) -> tuple[str | None, str | None]:
                 # бессмысленно, и на следующих новостях тоже.
                 _remote_generation_available = False
                 _remote_generation_reason = (
-                    f"у провайдера нет эндпоинта {settings.ai_image_endpoint} "
-                    f"(HTTP {exc.status_code}). Используется локальная карточка."
+                    f"у сервиса {settings.image_api_base} нет эндпоинта "
+                    f"{settings.ai_image_endpoint} (HTTP {exc.status_code}). "
+                    "Используется фирменная карточка."
                 )
                 logger.warning(
                     "Генерация изображений отключена на этот запуск: %s",
@@ -342,7 +360,8 @@ def _generate_image_remote(scene: str) -> tuple[str | None, str | None]:
                 return None, _remote_generation_reason
 
             if exc.is_permanent:
-                # Скорее всего эта модель недоступна — пробуем следующую.
+                # Модель недоступна, не существует или отвергла промпт —
+                # пробуем следующую из списка.
                 logger.info("Модель %s не подошла: %s", model, exc)
                 continue
 
@@ -358,6 +377,9 @@ def _generate_image_remote(scene: str) -> tuple[str | None, str | None]:
         stored = _store_image_bytes(image_bytes, prefix=f"gen_{digest}")
         if stored:
             _remote_generation_available = True
+            # Пометка обязательна: без неё нарисованный кадр читается
+            # как фотография с места происшествия.
+            add_ai_label(resolve(stored), settings.ai_image_label)
             logger.info("Изображение сгенерировано моделью %s", model)
             return stored, None
 
