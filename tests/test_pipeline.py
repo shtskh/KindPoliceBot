@@ -870,12 +870,148 @@ def test_image_generation() -> None:
     settings.image_api_key_raw = real_key
 
 
+# ==========================================================================
+# 15. Совместимость с разными моделями провайдера
+# ==========================================================================
+
+def test_model_compatibility() -> None:
+    """
+    Проверки написаны по живым отказам ProxyAPI: линейка gpt-5 не
+    принимает max_tokens и тратит весь лимит на рассуждения, оставляя
+    пустой текст. Раньше и то и другое роняло запрос.
+    """
+    import pipeline.ai_client as ac
+
+    section("Совместимость с моделями провайдера")
+
+    def answer(text: str = "готово", finish: str = "stop") -> dict:
+        return {"choices": [{"message": {"content": text},
+                             "finish_reason": finish}]}
+
+    real_post = ac.post_json
+    saved_rejected = set(ac._rejected_params)
+
+    # --- max_tokens -> max_completion_tokens ---
+    seen: list[dict] = []
+
+    def post_rejects_max_tokens(path, payload, **kwargs):
+        seen.append(dict(payload))
+        if "max_tokens" in payload:
+            raise ac.AIProviderError(
+                "HTTP 400: Unsupported parameter: 'max_tokens' is not "
+                "supported with this model. Use 'max_completion_tokens' "
+                "instead.",
+                status_code=400,
+            )
+        return answer()
+
+    ac._rejected_params = set()
+    ac.post_json = post_rejects_max_tokens
+    try:
+        check("запрос проходит после переименования лимита",
+              ac.chat([{"role": "user", "content": "x"}], max_tokens=300)
+              == "готово")
+        check("второй запрос ушёл с max_completion_tokens",
+              "max_completion_tokens" in seen[-1] and "max_tokens" not in seen[-1])
+
+        # Отказ запомнен: следующий вызов не должен повторять ошибку.
+        seen.clear()
+        ac.chat([{"role": "user", "content": "y"}], max_tokens=300)
+        check("отказ запомнен — лишнего запроса нет", len(seen) == 1)
+    finally:
+        ac.post_json = real_post
+
+    # --- temperature, которую модель не принимает ---
+    ac._rejected_params = set()
+
+    def post_rejects_temperature(path, payload, **kwargs):
+        seen.append(dict(payload))
+        if "temperature" in payload:
+            raise ac.AIProviderError(
+                "HTTP 400: Unsupported value: 'temperature' is not supported "
+                "with this model.",
+                status_code=400,
+            )
+        return answer()
+
+    seen.clear()
+    ac.post_json = post_rejects_temperature
+    try:
+        check("запрос проходит без temperature",
+              ac.chat([{"role": "user", "content": "x"}], temperature=0.6)
+              == "готово")
+        check("temperature убрана из повтора", "temperature" not in seen[-1])
+    finally:
+        ac.post_json = real_post
+
+    # --- рассуждающая модель съела весь лимит ---
+    ac._rejected_params = set()
+    budgets: list[int] = []
+
+    def post_reasoning(path, payload, **kwargs):
+        budget = payload.get("max_tokens") or payload.get("max_completion_tokens")
+        budgets.append(budget)
+        # Первый раз лимит уходит в рассуждения целиком.
+        if len(budgets) == 1:
+            return answer("", finish="length")
+        return answer("кадр описан")
+
+    ac.post_json = post_reasoning
+    try:
+        check("повтор с большим лимитом даёт текст",
+              ac.chat([{"role": "user", "content": "x"}], max_tokens=300)
+              == "кадр описан")
+        check("лимит действительно увеличен",
+              len(budgets) == 2 and budgets[1] > budgets[0], str(budgets))
+    finally:
+        ac.post_json = real_post
+
+    # --- пустой ответ без finish_reason=length остаётся ошибкой ---
+    ac._rejected_params = set()
+    ac.post_json = lambda path, payload, **kwargs: answer("", finish="stop")
+    try:
+        raised = False
+        try:
+            ac.chat([{"role": "user", "content": "x"}])
+        except ac.AIProviderError:
+            raised = True
+        # Молча вернуть пустую строку опаснее: пост уйдёт пустым.
+        check("пустой ответ без повода — ошибка", raised)
+    finally:
+        ac.post_json = real_post
+        ac._rejected_params = saved_rejected
+
+    # --- пометка не меняет формат файла ---
+    from pipeline.image_render import CARD_RENDER_AVAILABLE, add_ai_label
+
+    if CARD_RENDER_AVAILABLE:
+        from PIL import Image
+
+        for suffix, expected in ((".png", "PNG"), (".jpg", "JPEG")):
+            handle, path = tempfile.mkstemp(suffix=suffix)
+            os.close(handle)
+            try:
+                Image.new("RGB", (500, 500), (120, 130, 140)).save(path, expected)
+                add_ai_label(path, "Иллюстрация · ИИ")
+                with Image.open(path) as marked:
+                    # Расхождение расширения и содержимого ломает загрузку:
+                    # и Telegram, и MAX определяют тип по имени файла.
+                    check(f"{suffix}: формат файла сохранён",
+                          marked.format == expected, str(marked.format))
+            finally:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
         test_images, test_delivery, test_sources, test_seed, test_ai_client,
         test_assistant, test_audience_and_content, test_ranking,
         test_media, test_footer_title, test_image_generation,
+        test_model_compatibility,
     )
 
     for test in tests:

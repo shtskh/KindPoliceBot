@@ -122,8 +122,10 @@ class Settings:
     # Если IMAGE_API_KEY не задан, берётся основной ключ — это рабочий
     # вариант, когда один провайдер умеет и текст, и картинки.
     image_generation_enabled: bool = _env_bool("IMAGE_GENERATION_ENABLED", True)
+    # По умолчанию ProxyAPI: проверено вживую, оплата в рублях, работает
+    # с сервера в РФ без VPN. Прямой OpenAI — https://api.openai.com/v1
     image_api_base: str = os.getenv(
-        "IMAGE_API_BASE", "https://api.openai.com/v1"
+        "IMAGE_API_BASE", "https://api.proxyapi.ru/openai/v1"
     ).rstrip("/")
     image_api_key_raw: str = os.getenv("IMAGE_API_KEY", "")
     ai_image_endpoint: str = os.getenv(

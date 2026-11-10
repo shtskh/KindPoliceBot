@@ -191,6 +191,95 @@ def _sleep_backoff(attempt: int, attempts: int) -> None:
     time.sleep(delay)
 
 
+# Какие параметры запроса провайдер уже отверг. Линейка gpt-5 требует
+# max_completion_tokens вместо max_tokens и не принимает temperature;
+# провайдеры постарше, наоборот, знают только max_tokens. Определять
+# это по имени модели бессмысленно — список моделей меняется, а у
+# прокси-сервисов имена свои. Поэтому пробуем, запоминаем отказ и
+# дальше в этом запуске сразу отправляем то, что работает.
+_rejected_params: set[str] = set()
+
+
+def _apply_known_rejections(payload: dict[str, Any]) -> dict[str, Any]:
+    if "max_tokens" in _rejected_params and "max_tokens" in payload:
+        payload["max_completion_tokens"] = payload.pop("max_tokens")
+    if "temperature" in _rejected_params:
+        payload.pop("temperature", None)
+    return payload
+
+
+def _unsupported_param(message: str) -> str | None:
+    """Какой параметр провайдер назвал неподдерживаемым."""
+    lowered = message.lower()
+    if "max_tokens" in lowered and "max_completion_tokens" in lowered:
+        return "max_tokens"
+    if "temperature" in lowered and (
+        "unsupported" in lowered or "not supported" in lowered
+    ):
+        return "temperature"
+    return None
+
+
+def _chat_request(payload: dict[str, Any], *, label: str) -> dict:
+    """
+    Запрос к /chat/completions с подстройкой под требования провайдера.
+
+    Делает не больше двух дополнительных попыток: по одной на каждый
+    параметр, который провайдер может отвергнуть.
+    """
+    payload = _apply_known_rejections(dict(payload))
+
+    for _ in range(3):
+        try:
+            return post_json("/chat/completions", payload, label=label)
+        except AIProviderError as exc:
+            if exc.status_code != 400:
+                raise
+            param = _unsupported_param(str(exc))
+            if param is None or param in _rejected_params:
+                raise
+            _rejected_params.add(param)
+            logger.info(
+                "Провайдер не принимает %s — повторяю запрос без него.", param
+            )
+            payload = _apply_known_rejections(payload)
+
+    raise AIProviderError(f"[{label}] провайдер отверг параметры запроса")
+
+
+# Запас токенов для рассуждающих моделей: обычного лимита им не
+# хватает, потому что рассуждения тратятся из того же бюджета.
+_REASONING_BUDGET = 2000
+
+
+def _finish_reason(data: dict) -> str | None:
+    try:
+        return data["choices"][0].get("finish_reason")
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _content_from(data: dict, *, label: str) -> str:
+    """Текст ответа модели; пустая строка, если текста нет."""
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise AIProviderError(
+            f"[{label}] неожиданный формат ответа: {str(data)[:_ERROR_BODY_LIMIT]}"
+        ) from exc
+
+    # Некоторые провайдеры отдают content списком блоков
+    # ([{"type": "text", "text": "..."}]) вместо строки.
+    if isinstance(content, list):
+        content = "".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict)
+        )
+
+    return (content or "").strip()
+
+
 def chat(
     messages: list[dict[str, str]],
     *,
@@ -213,28 +302,30 @@ def chat(
     if temperature is not None:
         payload["temperature"] = temperature
 
-    data = post_json("/chat/completions", payload, label=label)
+    data = _chat_request(payload, label=label)
+    content = _content_from(data, label=label)
+    if content:
+        return content
 
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise AIProviderError(
-            f"[{label}] неожиданный формат ответа: {str(data)[:_ERROR_BODY_LIMIT]}"
-        ) from exc
-
-    # Некоторые провайдеры отдают content списком блоков
-    # ([{"type": "text", "text": "..."}]) вместо строки.
-    if isinstance(content, list):
-        content = "".join(
-            block.get("text", "")
-            for block in content
-            if isinstance(block, dict)
+    # Пустой ответ при finish_reason = "length" — это рассуждающая
+    # модель (линейка gpt-5): лимит токенов целиком ушёл на внутренние
+    # рассуждения, и до текста дело не дошло. Проверено на gpt-5-mini:
+    # при лимите 300 все 300 оказались reasoning_tokens, а content
+    # пришёл пустой. Повторяем один раз с запасом.
+    if _finish_reason(data) == "length":
+        bigger = max(_REASONING_BUDGET, max_tokens * 4)
+        logger.info(
+            "Модель израсходовала лимит на рассуждения — повторяю с %d токенов.",
+            bigger,
         )
+        payload["max_completion_tokens" if "max_completion_tokens" in payload
+                else "max_tokens"] = bigger
+        data = _chat_request(payload, label=label)
+        content = _content_from(data, label=label)
+        if content:
+            return content
 
-    content = (content or "").strip()
-    if not content:
-        raise AIProviderError(f"[{label}] провайдер вернул пустой текст")
-    return content
+    raise AIProviderError(f"[{label}] провайдер вернул пустой текст")
 
 
 def extract_json_object(raw: str) -> dict:

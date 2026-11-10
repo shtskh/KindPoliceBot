@@ -582,7 +582,15 @@ def add_ai_label(image_path: str | Path, text: str) -> bool:
             text, font=font, fill=(255, 255, 255, 235),
         )
 
-        image.save(path, format="JPEG", quality=92, optimize=True)
+        # Формат берём по расширению файла, а не «всегда JPEG»: иначе в
+        # файле gen_xxx.png оказывались байты JPEG. Отправка картинок и
+        # в Telegram, и в MAX идёт multipart с этим именем файла, и
+        # сервер определяет тип по расширению — расхождение приводило
+        # к отказу загрузки.
+        if path.suffix.lower() == ".png":
+            image.save(path, format="PNG", optimize=True)
+        else:
+            image.save(path, format="JPEG", quality=92, optimize=True)
         logger.info("На изображение поставлена пометка об ИИ: %s", path.name)
         return True
 
