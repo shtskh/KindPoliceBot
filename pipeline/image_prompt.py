@@ -64,9 +64,9 @@ SYSTEM_PROMPT = """
 ОБЯЗАТЕЛЬНЫЕ ОГРАНИЧЕНИЯ (нарушать нельзя)
 - Люди только со спины, издалека или не в фокусе. Никаких узнаваемых
   лиц и портретов крупным планом.
-- Не описывай знаки различия, шевроны, гербы, надписи на форме и
-  номера машин. Форма — просто "dark uniform", без деталей.
-- Никакого текста, букв, цифр, логотипов и водяных знаков в кадре.
+- Форму описывай так: "dark navy blue Russian police uniform, peaked
+  cap, shoulder boards". {insignia_rule}
+- Не описывай номера машин.
 - Никакой крови, травм, тел, оружия в действии, огнестрельных ран.
 - Не придумывай деталей, которых нет в новости.
 
@@ -78,15 +78,58 @@ SYSTEM_PROMPT = """
 поздравление) — верни ровно одно слово: NONE
 """.strip()
 
-# Хвост, который добавляется к любому промпту: он повторяет ключевые
-# запреты уже на языке генератора, потому что часть моделей следует
-# финальным указаниям охотнее, чем середине описания.
-PROMPT_SUFFIX = (
+# Как описывать форму. Проверено живыми генерациями 10.11.2026:
+# крой и цвет формы МВД генератор передаёт верно (тёмно-синий китель,
+# фуражка с кокардой, погоны), а вот шеврон подделывает — надпись «МВД»
+# на нём превращается в нечитаемый набор букв, а эмблема получается
+# лишь похожей на настоящую. При просмотре в ленте это незаметно, при
+# увеличении — сразу видно.
+#
+# Поэтому по умолчанию форма узнаваемая, но символика не читается.
+# Переключатель AI_IMAGE_SHOW_INSIGNIA=true разрешает генератору
+# рисовать шевроны и кокарды крупно — со всеми их неточностями.
+_INSIGNIA_RULE_OFF = (
+    "Шевроны, кокарду и надписи на форме не описывай: они должны быть "
+    "неразличимы — вид со спины, с расстояния или под углом."
+)
+_INSIGNIA_RULE_ON = (
+    "Шеврон на рукаве и кокарду на фуражке можно описать, но без текста "
+    "и надписей."
+)
+
+_SUFFIX_BASE = (
     "Documentary photography, natural light, muted colors, candid moment. "
     "No recognizable faces, no close-up portraits. "
-    "No text, no letters, no logos, no watermarks, no insignia. "
     "No blood, no injuries, no weapons."
 )
+_SUFFIX_NO_INSIGNIA = (
+    "Officers in dark navy blue Russian police uniform with peaked cap and "
+    "shoulder boards, seen from behind or at a distance so that emblems, "
+    "patches and lettering are not legible. "
+    "No text, no letters, no logos, no watermarks."
+)
+_SUFFIX_WITH_INSIGNIA = (
+    "Officers in the authentic dark navy blue uniform of the Russian "
+    "police: peaked cap with cockade, shoulder boards, sleeve patch. "
+    "No lettering, no watermarks."
+)
+
+
+def prompt_suffix() -> str:
+    """
+    Хвост, который добавляется к любому промпту: повторяет ключевые
+    требования на языке генератора, потому что часть моделей следует
+    финальным указаниям охотнее, чем середине описания.
+    """
+    if settings.ai_image_show_insignia:
+        return f"{_SUFFIX_BASE} {_SUFFIX_WITH_INSIGNIA}"
+    return f"{_SUFFIX_BASE} {_SUFFIX_NO_INSIGNIA}"
+
+
+def system_prompt() -> str:
+    rule = (_INSIGNIA_RULE_ON if settings.ai_image_show_insignia
+            else _INSIGNIA_RULE_OFF)
+    return SYSTEM_PROMPT.format(insignia_rule=rule)
 
 # Запасной вариант, если модель недоступна: хотя бы место и время года.
 FALLBACK_TEMPLATE = (
@@ -130,7 +173,7 @@ def build_image_prompt(item) -> str | None:
     if not settings.ai_configured:
         logger.info("Нет ключа AI — беру обобщённое описание кадра.")
         return FALLBACK_TEMPLATE.format(
-            season=_season_hint(month), suffix=PROMPT_SUFFIX
+            season=_season_hint(month), suffix=prompt_suffix()
         )
 
     place = " · ".join(p for p in (getattr(item, "city", None),
@@ -144,7 +187,7 @@ def build_image_prompt(item) -> str | None:
     try:
         scene = chat(
             [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt()},
                 {"role": "user", "content": user_prompt},
             ],
             model=settings.ai_model,
@@ -155,7 +198,7 @@ def build_image_prompt(item) -> str | None:
     except AIProviderError as exc:
         logger.warning("Не удалось сочинить кадр (%s) — беру обобщённый.", exc)
         return FALLBACK_TEMPLATE.format(
-            season=_season_hint(month), suffix=PROMPT_SUFFIX
+            season=_season_hint(month), suffix=prompt_suffix()
         )
 
     scene = _clean(scene)
@@ -164,6 +207,6 @@ def build_image_prompt(item) -> str | None:
         logger.info("Модель решила, что иллюстрировать нечего — будет карточка.")
         return None
 
-    prompt = f"{scene} {PROMPT_SUFFIX}"
+    prompt = f"{scene} {prompt_suffix()}"
     logger.info("Кадр для генерации: %s", scene[:120])
     return prompt

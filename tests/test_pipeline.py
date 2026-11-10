@@ -768,7 +768,7 @@ def test_image_generation() -> None:
 
     import pipeline.image_pipeline as ip
     from config import settings
-    from pipeline.image_prompt import PROMPT_SUFFIX, _clean, build_image_prompt
+    from pipeline.image_prompt import _clean, build_image_prompt, prompt_suffix
     from pipeline.image_render import CARD_RENDER_AVAILABLE, add_ai_label
     from storage.models import NewsItem
 
@@ -795,8 +795,23 @@ def test_image_generation() -> None:
 
     check("без ключа есть запасной промпт", bool(offline))
     check("в запасном промпте учтено время года", "winter" in (offline or ""))
-    for ban in ("No recognizable faces", "No text", "no insignia", "No blood"):
-        check(f"запрет сохранён: {ban[:22]}", ban in PROMPT_SUFFIX)
+    for ban in ("No recognizable faces", "No blood"):
+        check(f"запрет сохранён: {ban[:22]}", ban in prompt_suffix())
+
+    # Форма МВД узнаваема (цвет, фуражка, погоны), но символика на ней
+    # не читается: генератор подделывает надпись на шевроне.
+    saved_insignia = settings.ai_image_show_insignia
+    settings.ai_image_show_insignia = False
+    default_suffix = prompt_suffix()
+    check("форма описана как российская полицейская",
+          "Russian police uniform" in default_suffix)
+    check("символика по умолчанию нечитаема",
+          "not legible" in default_suffix and "No text" in default_suffix)
+
+    settings.ai_image_show_insignia = True
+    check("переключатель включает шеврон и кокарду",
+          "sleeve patch" in prompt_suffix() and "cockade" in prompt_suffix())
+    settings.ai_image_show_insignia = saved_insignia
 
     # Пустая новость иллюстрироваться не может.
     empty = NewsItem(id="2", source_name="x", source_url="", title="",
