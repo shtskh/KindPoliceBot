@@ -59,6 +59,10 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+# Куда ведут ссылки на канал и бота в этой версии.
+PUBLIC_LINK_BASE = "https://t.me/"
+
+
 @dataclass
 class Settings:
     # --- Токены доставки ---
@@ -310,6 +314,22 @@ class Settings:
     # Как часто страница забирает с сервера свежий список. Экран
     # работает сутками, перезагружать его вручную никто не будет.
     screen_refresh_seconds: int = _env_int("SCREEN_REFRESH_SECONDS", 300)
+    # QR-код на канал в углу экрана: зритель наводит телефон и
+    # подписывается, не записывая адрес с экрана.
+    screen_qr_enabled: bool = _env_bool("SCREEN_QR_ENABLED", True)
+    # Куда ведёт QR. Пусто — ссылка на канал из CHANNEL_USERNAME.
+    screen_link_raw: str = os.getenv("SCREEN_LINK", "")
+
+    # --- Веб-сервер ---
+    #
+    # Панель модерации и витрина живут в app.py. Хостинг запускает
+    # только main.py, поэтому сервер поднимается прямо оттуда в
+    # отдельном потоке: иначе /screen на сервере просто некому отдать.
+    web_enabled: bool = _env_bool("WEB_ENABLED", True)
+    # Порт: хостинги обычно передают его в PORT, поэтому читаем сначала
+    # его, а WEB_PORT оставляем для ручной настройки.
+    web_port: int = _env_int("WEB_PORT", _env_int("PORT", 8000))
+    web_host: str = os.getenv("WEB_HOST", "0.0.0.0")
 
     # --- Обязательная подпись в конце каждого опубликованного поста ---
     # Юзернеймы БЕЗ @. Это публичная информация (не секрет).
@@ -324,6 +344,15 @@ class Settings:
     # --- Логирование ---
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
     log_to_file: bool = _env_bool("LOG_TO_FILE", True)
+
+    @property
+    def screen_link(self) -> str:
+        """Адрес канала для QR-кода на витрине."""
+        if self.screen_link_raw:
+            return self.screen_link_raw
+        if self.channel_username:
+            return f"{PUBLIC_LINK_BASE}{self.channel_username}"
+        return ""
 
     @property
     def image_api_key(self) -> str:

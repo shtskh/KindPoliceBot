@@ -1121,6 +1121,38 @@ def test_screen() -> None:
         one = client.get("/screen/data", params={"region": "Вологодская область"})
         check("фильтр по региону работает", len(one.json()["posts"]) == 1)
 
+        # --- QR-код на канал ---
+        saved_qr, saved_link = settings.screen_qr_enabled, settings.screen_link_raw
+        settings.screen_qr_enabled = True
+        settings.screen_link_raw = "https://max.ru/test_channel"
+        screen._qr_cache, screen._qr_failed = None, False
+
+        qr = client.get("/screen/qr.png")
+        try:
+            import qrcode  # noqa: F401
+            has_qrcode = True
+        except ImportError:
+            has_qrcode = False
+
+        if has_qrcode:
+            check("QR отдаётся", qr.status_code == 200, str(qr.status_code))
+            check("QR — это PNG", qr.content[:4] == bytes([137, 80, 78, 71]))
+        else:
+            # Без библиотеки витрина обязана работать, просто без QR.
+            check("без qrcode витрина не падает", qr.status_code == 404)
+
+        page_qr = client.get("/screen").text
+        check("адрес канала выведен без протокола",
+              '"link": "max.ru/test_channel"' in page_qr
+              or '"link":"max.ru/test_channel"' in page_qr)
+
+        settings.screen_qr_enabled = False
+        check("QR можно отключить",
+              client.get("/screen/qr.png").status_code == 404)
+        settings.screen_qr_enabled = saved_qr
+        settings.screen_link_raw = saved_link
+        screen._qr_cache, screen._qr_failed = None, False
+
         settings.screen_enabled = False
         check("выключенная витрина отвечает 404",
               client.get("/screen").status_code == 404

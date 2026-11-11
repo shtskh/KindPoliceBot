@@ -48,7 +48,12 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    Response,
+)
 
 from config import settings
 from logging_setup import get_logger
@@ -177,6 +182,12 @@ def screen_media(item_id: str):
     return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
 
 
+def _link_label(link: str) -> str:
+    """«max.ru/mvd» — адрес без протокола: на экране он короче и читается
+    так же, как его потом наберут руками."""
+    return link.replace("https://", "").replace("http://", "").rstrip("/")
+
+
 @router.get("/screen", response_class=HTMLResponse)
 def screen_page(
     interval: int | None = Query(default=None, ge=5, le=3600),
@@ -199,6 +210,8 @@ def screen_page(
         "region": region,
         "refresh": settings.screen_refresh_seconds,
         "title": settings.channel_title,
+        "qr": bool(settings.screen_qr_enabled and settings.screen_link),
+        "link": _link_label(settings.screen_link),
     }
     return HTMLResponse(PAGE_TEMPLATE.replace(
         "__CONFIG__", json.dumps(config, ensure_ascii=False)
@@ -312,6 +325,8 @@ PAGE_TEMPLATE = """<!doctype html>
     align-items: center;
   }
   .meta .dot { opacity: .45; }
+  /* Место под QR: без отступа строка с датой уезжала под карточку. */
+  .has-qr .meta { padding-right: 18vmin; }
 
   /* Шапка и прогресс поверх кадра */
   .brand {
@@ -349,12 +364,35 @@ PAGE_TEMPLATE = """<!doctype html>
     background: var(--accent);
     box-shadow: 0 0 2vmin rgba(79, 125, 240, .7);
   }
-  .counter {
+  .clock .counter { color: var(--muted); }
+  .clock .sep { opacity: .4; margin: 0 .8vmin; }
+
+  /* QR в нижнем углу текстовой панели: на снимке он мешал бы кадру,
+     а рядом с текстом читается как часть поста. */
+  .qr {
     position: absolute;
-    bottom: 2.4vmin; right: 3.4vmin;
-    font-size: 1.7vmin;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
+    right: 3.4vmin; bottom: 4.2vmin;
+    display: flex; align-items: center; gap: 1.4vmin;
+    padding: 1.2vmin;
+    background: #fff;
+    border-radius: 1.2vmin;
+    box-shadow: 0 .6vmin 2.4vmin rgba(0, 0, 0, .35);
+  }
+  .qr img { width: 11vmin; height: 11vmin; display: block; }
+  .qr .caption {
+    color: #16203a;
+    font-size: 1.6vmin;
+    font-weight: 700;
+    line-height: 1.35;
+    max-width: 19vmin;
+  }
+  .qr .caption span {
+    display: block;
+    font-weight: 500;
+    opacity: .7;
+    /* Длинное имя канала переносим, а не обрезаем: обрезанный адрес
+       на экране бесполезен — его не набрать руками. */
+    word-break: break-all;
   }
 
   .notice {
@@ -381,6 +419,10 @@ PAGE_TEMPLATE = """<!doctype html>
     .meta { margin-top: 3vmin; }
     .brand, .clock { font-size: 2.4vmin; }
     .counter { font-size: 2.2vmin; }
+    .qr { right: 3.4vmin; bottom: 4vmin; gap: 2vmin; }
+    .has-qr .meta { padding-right: 26vmin; }
+    .qr img { width: 17vmin; height: 17vmin; }
+    .qr .caption { font-size: 2.3vmin; max-width: 30vmin; }
   }
 </style>
 </head>
@@ -389,8 +431,13 @@ PAGE_TEMPLATE = """<!doctype html>
     <div id="notice" class="notice">Загружаем новости…</div>
   </div>
   <div class="brand"><span class="mark"></span><span id="brand-title"></span></div>
-  <div class="clock" id="clock"></div>
-  <div class="counter" id="counter"></div>
+  <div class="clock">
+    <span class="counter" id="counter"></span><span class="sep">·</span><span id="clock-time"></span>
+  </div>
+  <div class="qr hidden" id="qr">
+    <img src="/screen/qr.png" alt="" onerror="document.getElementById('qr').classList.add('hidden'); document.body.classList.remove('has-qr')">
+    <div class="caption">Все новости<span id="qr-link"></span></div>
+  </div>
   <div class="progress" id="progress"></div>
 
 <script>
@@ -400,8 +447,14 @@ const stage = document.getElementById('stage');
 const notice = document.getElementById('notice');
 const progress = document.getElementById('progress');
 const counter = document.getElementById('counter');
-const clock = document.getElementById('clock');
+const clock = document.getElementById('clock-time');
 document.getElementById('brand-title').textContent = CONFIG.title;
+
+if (CONFIG.qr) {
+  document.getElementById('qr-link').textContent = CONFIG.link;
+  document.getElementById('qr').classList.remove('hidden');
+  document.body.classList.add('has-qr');
+}
 
 let posts = [];
 let index = 0;
@@ -542,3 +595,68 @@ setInterval(() => loadPosts(false), CONFIG.refresh * 1000);
 </body>
 </html>
 """
+
+
+# --------------------------------------------------------------------------
+# QR-код на канал
+# --------------------------------------------------------------------------
+
+# Картинку рисуем один раз на процесс: адрес канала не меняется, а
+# экран запрашивает её на каждой перезагрузке страницы.
+_qr_cache: bytes | None = None
+_qr_failed = False
+
+
+def _build_qr(link: str) -> bytes | None:
+    """PNG с QR-кодом или None, если библиотека не установлена."""
+    try:
+        import qrcode
+    except ImportError:
+        # Витрина обязана работать и без qrcode: без QR она всё равно
+        # показывает новости, а падать из-за украшения нельзя.
+        logger.info("Библиотека qrcode не установлена — QR не будет показан.")
+        return None
+
+    from io import BytesIO
+
+    # Коррекция ошибок M: кода хватает, чтобы читался с отражениями и
+    # бликами на экране, и при этом он остаётся не слишком плотным.
+    code = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=2,
+    )
+    code.add_data(link)
+    code.make(fit=True)
+    image = code.make_image(fill_color="black", back_color="white")
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@router.get("/screen/qr.png")
+def screen_qr():
+    """QR-код со ссылкой на канал — чтобы зритель подписался с телефона."""
+    global _qr_cache, _qr_failed
+
+    if not settings.screen_enabled or not settings.screen_qr_enabled:
+        raise HTTPException(status_code=404, detail="QR отключён")
+
+    link = settings.screen_link
+    if not link:
+        raise HTTPException(status_code=404, detail="Адрес канала не задан")
+
+    if _qr_cache is None and not _qr_failed:
+        _qr_cache = _build_qr(link)
+        _qr_failed = _qr_cache is None
+
+    if not _qr_cache:
+        raise HTTPException(status_code=404, detail="QR недоступен")
+
+    return Response(
+        content=_qr_cache,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
