@@ -42,13 +42,18 @@ from delivery.tg_delivery import (
 from logging_setup import setup_logging
 from paths import resolve
 from pipeline import image_pipeline
+from screen import router as screen_router
 from storage import db
 from storage.models import NewsStatus
 
 logger = setup_logging(settings.log_level, settings.log_to_file)
 
-app = FastAPI(title="Модерация — Хороший полицейский")
+app = FastAPI(title="Модерация — Добрые новости о полиции")
+
+# Витрина для экрана (/screen) — публичная часть того же сервера:
+# показывает только опубликованные посты, пароля не требует.
 security = HTTPBasic()
+app.include_router(screen_router)
 
 
 @app.on_event("startup")

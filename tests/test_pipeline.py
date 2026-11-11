@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import shutil
 import tempfile
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -1020,13 +1021,123 @@ def test_model_compatibility() -> None:
                     pass
 
 
+# ==========================================================================
+# 16. Витрина для экрана
+# ==========================================================================
+
+def test_screen() -> None:
+    """
+    Витрина публичная, поэтому главное здесь — что наружу уходит только
+    опубликованное. Проверки идут через настоящий HTTP-клиент FastAPI,
+    а не вызовом функций: маршрут, коды ответа и фильтры — часть
+    поведения, ради которого витрина и существует.
+    """
+    section("Витрина для экрана")
+
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        check("TestClient доступен", False, "не установлен starlette/httpx")
+        return
+
+    from datetime import datetime, timezone
+
+    import screen
+    from config import settings
+    from storage import db
+    from storage.models import NewsItem, NewsStatus
+
+    workdir = tempfile.mkdtemp()
+    db_path = os.path.join(workdir, "screen.db")
+    saved_db, saved_enabled = settings.db_path, settings.screen_enabled
+    settings.db_path = db_path
+    settings.screen_enabled = True
+    db.init_db(db_path)
+
+    def add(item_id: str, status: NewsStatus, **kwargs) -> NewsItem:
+        item = NewsItem(
+            id=item_id, source_name="МВД России",
+            source_url=f"https://мвд.рф/news/{item_id}",
+            title="Заголовок", raw_text="Исходный текст новости.",
+            published_at=datetime(2026, 11, 1, tzinfo=timezone.utc),
+            status=status, **kwargs,
+        )
+        db.save_item(db_path, item)
+        db.update_status(db_path, item_id, status)
+        return item
+
+    add("pub-1", NewsStatus.PUBLISHED, region="Тверская область",
+        city="Квакшино", rewritten_text="Полицейские вынесли женщину из огня.",
+        image_path="storage/images/нет-такого.jpg", image_source="generated")
+    add("pub-2", NewsStatus.PUBLISHED, region="Вологодская область",
+        rewritten_text="Участковый нашёл подростка в лесу.")
+    add("wait-1", NewsStatus.PENDING_MODERATION,
+        rewritten_text="Ещё не смотрел модератор.")
+    add("bad-1", NewsStatus.REJECTED, rewritten_text="Отклонено модератором.")
+
+    from screen import router  # noqa: F401  (регистрируется в приложении)
+    from fastapi import FastAPI
+
+    probe = FastAPI()
+    probe.include_router(screen.router)
+    client = TestClient(probe)
+
+    try:
+        data = client.get("/screen/data").json()
+        texts = [post["text"] for post in data["posts"]]
+
+        check("витрина отдаёт опубликованное", len(data["posts"]) == 2,
+              str(texts))
+        # Главное свойство: по публичному адресу не должно утечь ничего
+        # из очереди модерации и ничего отклонённого.
+        check("неопубликованного в витрине нет",
+              all("модератор" not in text for text in texts), str(texts))
+        check("на экран идёт переписанный текст, а не исходник",
+              all("Исходный текст" not in text for text in texts))
+        check("регион и город склеены",
+              data["posts"][-1]["place"] == "Тверская область · Квакшино",
+              data["posts"][-1]["place"])
+        check("пометка об ИИ передана",
+              data["posts"][-1]["generated"] is True)
+
+        # Медиа: только у опубликованных и только существующие файлы.
+        check("нет файла — 404, а не пустая картинка",
+              client.get("/screen/media/pub-1").status_code == 404)
+        check("медиа неопубликованного недоступно",
+              client.get("/screen/media/wait-1").status_code == 404)
+        check("медиа несуществующего поста недоступно",
+              client.get("/screen/media/нет-такого").status_code == 404)
+
+        page = client.get("/screen")
+        check("страница отдаётся", page.status_code == 200)
+        check("страница самодостаточна: без внешних загрузок",
+              "http://" not in page.text.replace("http://www.w3.org", "")
+              and "cdn" not in page.text.lower())
+        check("интервал подставлен в страницу",
+              f'"interval": {settings.screen_interval_seconds}' in page.text
+              or f'"interval":{settings.screen_interval_seconds}' in page.text)
+
+        # Экран можно привязать к региону, не поднимая второй сервер.
+        one = client.get("/screen/data", params={"region": "Вологодская область"})
+        check("фильтр по региону работает", len(one.json()["posts"]) == 1)
+
+        settings.screen_enabled = False
+        check("выключенная витрина отвечает 404",
+              client.get("/screen").status_code == 404
+              and client.get("/screen/data").status_code == 404)
+    finally:
+        settings.db_path = saved_db
+        settings.screen_enabled = saved_enabled
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
         test_images, test_delivery, test_sources, test_seed, test_ai_client,
         test_assistant, test_audience_and_content, test_ranking,
         test_media, test_footer_title, test_image_generation,
-        test_model_compatibility,
+        test_model_compatibility, test_screen,
     )
 
     for test in tests:
