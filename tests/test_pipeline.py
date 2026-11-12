@@ -1160,6 +1160,14 @@ def test_screen() -> None:
 
         page = client.get("/screen")
         check("страница отдаётся", page.status_code == 200)
+        # На телефоне длинный пост заезжал под QR-карточку: место под
+        # неё резервируется, а не угадывается, и кегль подгоняется под
+        # длину текста.
+        check("под QR зарезервировано место",
+              "--qr-bottom" in page.text and "--qr-space" in page.text)
+        check("кегль подгоняется под длину текста",
+              "function fitText" in page.text
+              and "scrollHeight" in page.text)
         check("страница самодостаточна: без внешних загрузок",
               "http://" not in page.text.replace("http://www.w3.org", "")
               and "cdn" not in page.text.lower())

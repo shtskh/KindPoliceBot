@@ -337,6 +337,7 @@ PAGE_TEMPLATE = """<!doctype html>
   .body {
     background: var(--panel);
     padding: 5vmin 5vmin 4vmin;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     gap: 2.4vmin;
@@ -372,6 +373,9 @@ PAGE_TEMPLATE = """<!doctype html>
      отступ измеряется на странице (--qr-space), а значение в vmin
      остаётся запасным на случай, если QR не загрузился. */
   .has-qr .meta { padding-right: var(--qr-space, 20vmin); }
+  /* Высота карточки + зазор: без этого длинный пост на телефоне
+     заезжал прямо под QR. */
+  .has-qr .body { padding-bottom: var(--qr-bottom, 4vmin); }
 
   /* Шапка и прогресс поверх кадра */
   .brand {
@@ -501,10 +505,45 @@ function reserveQrSpace() {
   // Отступ строки с датой считаем по фактической ширине карточки:
   // длинное имя канала делает её заметно шире, и строка уезжала
   // под QR.
-  const width = qrBox.getBoundingClientRect().width;
-  if (width) {
+  const box = qrBox.getBoundingClientRect();
+  if (box.width) {
     document.documentElement.style.setProperty(
-      '--qr-space', Math.round(width + 28) + 'px');
+      '--qr-space', Math.round(box.width + 28) + 'px');
+  }
+  if (box.height) {
+    document.documentElement.style.setProperty(
+      '--qr-bottom', Math.round(box.height + 40) + 'px');
+  }
+  // Размеры панели изменились — текст подогнать заново.
+  fitText(document.querySelector('.slide.visible'));
+}
+
+function fitText(slide) {
+  // Посты бывают и в три строки, и в двенадцать. Один фиксированный
+  // кегль на все случаи не годится: короткий пост теряется на экране,
+  // длинный не помещается и обрывается на полуслове. Поэтому
+  // подбираем размер под конкретный текст — уменьшаем, пока панель не
+  // перестанет переполняться.
+  if (!slide) return;
+  const body = slide.querySelector('.body');
+  const text = slide.querySelector('.text');
+  if (!body || !text) return;
+
+  text.style.fontSize = '';
+  let size = parseFloat(getComputedStyle(text).fontSize);
+  const floor = size * 0.55;   // ниже — уже неразборчиво с расстояния
+  let guard = 40;
+
+  // Переполнение ловим по самому блоку текста: он обрезает лишнее
+  // внутри себя (overflow: hidden), поэтому панель о переполнении
+  // ничего не знает — на телефоне текст из-за этого обрывался на
+  // полуслове.
+  const tooBig = () => text.scrollHeight > text.clientHeight + 1
+                       || body.scrollHeight > body.clientHeight + 1;
+
+  while (guard-- > 0 && tooBig() && size > floor) {
+    size *= 0.95;
+    text.style.fontSize = size + 'px';
   }
 }
 
@@ -610,7 +649,10 @@ function show(next) {
   stage.appendChild(slide);
   // Кадр добавляем прозрачным и зажигаем на следующем кадре отрисовки,
   // иначе переход не успевает начаться и картинка появляется рывком.
-  requestAnimationFrame(() => slide.classList.add('visible'));
+  requestAnimationFrame(() => {
+    slide.classList.add('visible');
+    fitText(slide);
+  });
 
   const previous = stage.querySelectorAll('.slide');
   if (previous.length > 1) {
