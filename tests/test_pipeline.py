@@ -1163,13 +1163,58 @@ def test_screen() -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+# ==========================================================================
+# 17. Путь к базе данных
+# ==========================================================================
+
+def test_db_path() -> None:
+    """
+    DB_PATH часто указывают на смонтированный диск. Если диска нет,
+    sqlite падает с «unable to open database file», и бот уходит в
+    бесконечный перезапуск — так уже случилось на сервере.
+    """
+    from storage import db
+
+    section("Путь к базе данных")
+
+    root = tempfile.mkdtemp()
+    try:
+        # Именно этот случай: DB_PATH=/data/bot.db, папки /data нет.
+        nested = os.path.join(root, "data", "bot.db")
+        db.init_db(nested)
+        check("папка под базу создаётся сама", os.path.isfile(nested))
+
+        # База в созданной папке должна быть рабочей, а не пустым файлом.
+        with db.get_connection(nested) as conn:
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        check("таблицы на месте", "news_items" in tables, str(sorted(tables)))
+
+        # Недоступный путь должен объяснять причину, а не ронять sqlite.
+        blocked = os.path.join(root, "файл-а-не-папка")
+        with open(blocked, "w", encoding="utf-8") as handle:
+            handle.write("занято")
+
+        raised = ""
+        try:
+            db.init_db(os.path.join(blocked, "bot.db"))
+        except RuntimeError as exc:
+            raised = str(exc)
+        except Exception as exc:  # pragma: no cover
+            raised = f"НЕ ТОТ ТИП: {type(exc).__name__}"
+
+        check("ошибка пути понятна", "DB_PATH" in raised, raised[:120])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
         test_images, test_delivery, test_sources, test_seed, test_ai_client,
         test_assistant, test_audience_and_content, test_ranking,
         test_media, test_footer_title, test_image_generation,
-        test_model_compatibility, test_screen,
+        test_model_compatibility, test_screen, test_db_path,
     )
 
     for test in tests:

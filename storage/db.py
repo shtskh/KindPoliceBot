@@ -33,6 +33,7 @@ import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from logging_setup import get_logger
 from storage.models import BotUser, NewsItem, NewsStatus, PublicResource, UserRole
@@ -151,6 +152,31 @@ MIGRATIONS = (
 )
 
 
+def prepare_db_dir(db_path: str) -> None:
+    """
+    Создаёт папку под файл базы.
+
+    DB_PATH часто указывают на смонтированный диск (`/data/bot.db`).
+    Если диск не подключён, sqlite падает с «unable to open database
+    file», и по этому сообщению невозможно понять, что дело в пути, —
+    бот просто уходит в бесконечный перезапуск. Поэтому папку создаём
+    сами, а если не выходит, говорим прямо, что именно не так.
+    """
+    parent = Path(db_path).expanduser().parent
+    if str(parent) in ("", "."):
+        return
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Не удалось создать папку для базы: {parent} ({exc}). "
+            "Проверьте переменную DB_PATH: если она указывает на "
+            "смонтированный диск, диск должен быть подключён и доступен "
+            "на запись. Без диска оставьте DB_PATH пустой — база ляжет "
+            "в storage/bot.db внутри проекта."
+        ) from exc
+
+
 @contextmanager
 def get_connection(db_path: str):
     """
@@ -160,7 +186,15 @@ def get_connection(db_path: str):
     соединение просто закрывалось, и часть изменений могла остаться
     в неопределённом состоянии. Теперь при ошибке делаем rollback.
     """
-    conn = sqlite3.connect(db_path, timeout=15.0)
+    try:
+        conn = sqlite3.connect(db_path, timeout=15.0)
+    except sqlite3.OperationalError as exc:
+        # Голое «unable to open database file» ничего не объясняет.
+        raise RuntimeError(
+            f"Не удалось открыть базу {db_path}: {exc}. "
+            "Чаще всего причина в DB_PATH: папки нет или в неё нельзя "
+            "писать. Без смонтированного диска оставьте DB_PATH пустой."
+        ) from exc
     conn.row_factory = sqlite3.Row
     try:
         # WAL позволяет читать во время записи (бот + веб-панель),
@@ -183,6 +217,7 @@ def init_db(db_path: str):
     from paths import ensure_dirs
 
     ensure_dirs()
+    prepare_db_dir(db_path)
 
     with get_connection(db_path) as conn:
         conn.execute(SCHEMA)
