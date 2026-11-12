@@ -1208,6 +1208,63 @@ def test_db_path() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+# ==========================================================================
+# 18. Выдача новостей по ходу цикла
+# ==========================================================================
+
+def test_live_delivery() -> None:
+    """
+    Цикл сбора идёт минуты: обход лент, догрузка страниц, генерация
+    картинок. Раньше модераторы получали всё только в конце, и это
+    выглядело как зависший бот.
+    """
+    from datetime import datetime, timezone
+
+    import pipeline.orchestrator as orch
+    from storage.models import NewsItem
+
+    section("Выдача новостей по ходу цикла")
+
+    delivered: list[str] = []
+    ready = [
+        NewsItem(id="a", source_name="МВД", source_url="https://x/a",
+                 title="Первая", raw_text="текст",
+                 published_at=datetime.now(timezone.utc)),
+        NewsItem(id="b", source_name="МВД", source_url="https://x/b",
+                 title="Вторая", raw_text="текст",
+                 published_at=datetime.now(timezone.utc)),
+    ]
+
+    saved = (orch.collect_raw_news, orch.rank_candidates,
+             orch.process_raw_item, orch.db.init_db)
+    orch.collect_raw_news = lambda stats: [object(), object()]
+    orch.rank_candidates = lambda items: items
+    orch.process_raw_item = lambda raw, stats: ready.pop(0) if ready else None
+    orch.db.init_db = lambda path: None
+    try:
+        items, _ = orch.run_collection_cycle(
+            limit=5, on_item=lambda item: delivered.append(item.id)
+        )
+        check("новости отданы по ходу", delivered == ["a", "b"], str(delivered))
+        check("цикл всё равно возвращает список",
+              [i.id for i in items] == ["a", "b"])
+
+        # Сбой отправки одной новости не должен прерывать сбор.
+        ready[:] = [NewsItem(id="c", source_name="МВД", source_url="https://x/c",
+                             title="Третья", raw_text="текст",
+                             published_at=datetime.now(timezone.utc))]
+
+        def broken(item):
+            raise RuntimeError("чат недоступен")
+
+        items, _ = orch.run_collection_cycle(limit=5, on_item=broken)
+        check("ошибка отправки не роняет цикл",
+              [i.id for i in items] == ["c"])
+    finally:
+        (orch.collect_raw_news, orch.rank_candidates,
+         orch.process_raw_item, orch.db.init_db) = saved
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
@@ -1215,6 +1272,7 @@ def main() -> int:
         test_assistant, test_audience_and_content, test_ranking,
         test_media, test_footer_title, test_image_generation,
         test_model_compatibility, test_screen, test_db_path,
+        test_live_delivery,
     )
 
     for test in tests:

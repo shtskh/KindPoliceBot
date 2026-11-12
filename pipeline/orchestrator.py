@@ -57,6 +57,11 @@ PAUSE_BETWEEN_LLM_CALLS = 0.7
 SOURCE_FETCH_WORKERS = 16
 
 ProgressCallback = Callable[[str], None]
+# Вызывается на каждую готовую новость, не дожидаясь конца
+# цикла: обход источников с генерацией картинок идёт
+# минуты, и ждать всё это время нечего — модератор может
+# начинать работу с первой же новостью.
+ItemCallback = Callable[["NewsItem"], None]
 
 
 @dataclass
@@ -337,6 +342,7 @@ def process_raw_item(raw: RawNewsItem, stats: CollectionStats | None = None) -> 
 def run_collection_cycle(
     limit: int | None = None,
     progress: ProgressCallback | None = None,
+    on_item: ItemCallback | None = None,
 ) -> tuple[list[NewsItem], CollectionStats]:
     """
     Собирает новости и останавливается, когда найдено `limit` подходящих
@@ -393,6 +399,14 @@ def run_collection_cycle(
 
         if processed:
             pending.append(processed)
+            if on_item:
+                # Отдаём новость сразу. Ошибка отправки не должна
+                # прерывать цикл: остальные новости тут не виноваты.
+                try:
+                    on_item(processed)
+                except Exception:
+                    logger.exception("Не удалось отдать новость %s сразу",
+                                     processed.id)
             if progress:
                 progress(
                     f"Готово {len(pending)} из {limit} "

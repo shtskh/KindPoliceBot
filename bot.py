@@ -476,15 +476,27 @@ async def run_collection_and_notify(
                 _safe_edit(progress_message, f"⏳ {text}"), loop
             )
 
-        items, stats = await asyncio.to_thread(
-            run_collection_cycle, settings.fetch_limit, progress
-        )
+        def deliver(item) -> None:
+            """
+            Новость уходит модераторам сразу, как только готова.
 
-        for item in items:
+            Раньше отправка шла после всего цикла, а он занимает
+            минуты: обход восьмидесяти лент, догрузка страниц и
+            генерация картинок. Всё это время в чате модерации было
+            пусто, и выглядело это как зависший бот.
+            """
+            future = asyncio.run_coroutine_threadsafe(
+                send_item_to_moderators(item), loop
+            )
             try:
-                await send_item_to_moderators(item)
+                future.result(timeout=120)
             except Exception:
-                logger.exception("Не удалось отправить новость %s модераторам", item.id)
+                logger.exception("Не удалось отправить новость %s модераторам",
+                                 item.id)
+
+        items, stats = await asyncio.to_thread(
+            run_collection_cycle, settings.fetch_limit, progress, deliver
+        )
 
         return items, stats
 
