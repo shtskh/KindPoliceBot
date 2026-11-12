@@ -753,9 +753,20 @@ def test_footer_title() -> None:
     section("Название канала в подписи")
 
     footer = build_footer()
-    check("в подписи новое название", settings.channel_title in footer, footer)
-    # Раньше название было зашито в код и настройку игнорировало.
-    check("старое название исчезло", "Хороший полицейский" not in footer, footer)
+    check("в подписи название из настроек",
+          settings.channel_title in footer, footer)
+
+    # Раньше название было зашито в код и настройку игнорировало —
+    # проект уже дважды переименовывали, и каждый раз подпись
+    # приходилось искать по всему коду.
+    saved = settings.channel_title
+    settings.channel_title = "Проверочное название"
+    try:
+        check("подпись следует за настройкой",
+              "Проверочное название" in build_footer()
+              and saved not in build_footer(), build_footer())
+    finally:
+        settings.channel_title = saved
 
 
 # ==========================================================================

@@ -274,7 +274,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Добрые новости о полиции</title>
+<title>Мы Вам Доверяем</title>
 <style>
   :root {
     --bg: #0b1020;
@@ -316,13 +316,27 @@ PAGE_TEMPLATE = """<!doctype html>
   }
 
   .media { position: relative; overflow: hidden; background: #060912; }
+  /* Снимок показываем целиком (contain): пропорции фотографий с мест
+     событий не совпадают с пропорциями экрана, и обрезка по краям
+     съедала то людей, то половину сцены. Пустоту по бокам закрывает
+     размытая копия того же кадра — так поле не выглядит чёрной
+     дырой, а внимание остаётся на самом снимке. */
+  .media-blur {
+    position: absolute;
+    inset: -6%;
+    background-size: cover;
+    background-position: center;
+    filter: blur(2.6vmin) brightness(.5) saturate(.8);
+    transform: scale(1.08);
+    /* Движение осталось на подложке: неподвижное яркое изображение
+       часами подряд оставляет след на матрице. */
+    animation: drift 50s ease-in-out infinite alternate;
+  }
   .media img, .media video {
+    position: relative;
     width: 100%; height: 100%;
-    object-fit: cover;
+    object-fit: contain;
     display: block;
-    /* Медленный наезд: неподвижная картинка часами подряд выжигает
-       матрицу, а движение к тому же оживляет статичный слайд. */
-    animation: drift 40s ease-in-out infinite alternate;
   }
   @keyframes drift {
     from { transform: scale(1.00) translate3d(0, 0, 0); }
@@ -330,7 +344,7 @@ PAGE_TEMPLATE = """<!doctype html>
   }
   /* Если в системе выключены анимации — уважаем настройку. */
   @media (prefers-reduced-motion: reduce) {
-    .media img, .media video { animation: none; }
+    .media-blur { animation: none; }
     .slide { transition: none; }
   }
 
@@ -405,13 +419,26 @@ PAGE_TEMPLATE = """<!doctype html>
     font-variant-numeric: tabular-nums;
     backdrop-filter: blur(6px);
   }
+  /* Полосу ведёт CSS-анимация, а не перерисовка из скрипта: раньше
+     ширина пересчитывалась десять раз в секунду, и на экране это
+     читалось как рывки. Анимацию браузер проигрывает плавно и на
+     паузу ставит одним свойством. */
+  @keyframes progress-grow {
+    from { transform: scaleX(0); }
+    to   { transform: scaleX(1); }
+  }
   .progress {
     position: absolute;
     left: 0; bottom: 0;
     height: .5vmin;
-    width: 0%;
+    width: 100%;
+    transform: scaleX(0);
+    transform-origin: left center;
     background: var(--accent);
     box-shadow: 0 0 2vmin rgba(79, 125, 240, .7);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .progress { animation: none !important; }
   }
   .clock .counter { color: var(--muted); }
   .clock .sep { opacity: .4; margin: 0 .8vmin; }
@@ -609,12 +636,16 @@ function buildSlide(post) {
   slide.className = 'slide';
 
   let media = '<div class="media"></div>';
-  if (post.media === 'video') {
-    media = '<div class="media"><video src="' + esc(post.media_url) +
-            '" autoplay muted loop playsinline></video></div>';
-  } else if (post.media === 'image') {
-    media = '<div class="media"><img src="' + esc(post.media_url) +
-            '" alt=""></div>';
+  if (post.media_url) {
+    // Размытая подложка — тот же файл: лишней загрузки нет, браузер
+    // берёт его из кеша.
+    const backdrop = '<div class="media-blur" style="background-image:url(' +
+                     encodeURI(post.media_url) + ')"></div>';
+    const content = post.media === 'video'
+      ? '<video src="' + esc(post.media_url) +
+        '" autoplay muted loop playsinline></video>'
+      : '<img src="' + esc(post.media_url) + '" alt="">';
+    media = '<div class="media">' + backdrop + content + '</div>';
   }
 
   const place = post.place
@@ -663,15 +694,38 @@ function show(next) {
 
   counter.textContent = (index + 1) + ' / ' + posts.length;
   slideStarted = Date.now();
+  restartProgress();
   preload(posts[(index + 1) % posts.length]);
+}
+
+// Система может просить не анимировать (настройка доступности, а на
+// части телевизоров — режим экономии). Тогда полосу двигаем шагами из
+// скрипта: совсем без неё непонятно, сколько осталось до смены поста.
+const REDUCED_MOTION = window.matchMedia
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function setProgress(fraction) {
+  progress.style.transform = 'scaleX(' + Math.min(1, fraction) + ')';
+}
+
+function restartProgress() {
+  if (REDUCED_MOTION) {
+    setProgress(0);
+    return;
+  }
+  // Перезапуск анимации: без сброса браузер продолжает прежнюю.
+  progress.style.animation = 'none';
+  void progress.offsetWidth;
+  progress.style.animation =
+    'progress-grow ' + CONFIG.interval + 's linear forwards';
+  progress.style.animationPlayState = paused ? 'paused' : 'running';
 }
 
 function tick() {
   if (paused || posts.length === 0) return;
   const elapsed = Date.now() - slideStarted;
-  const total = CONFIG.interval * 1000;
-  progress.style.width = Math.min(100, (elapsed / total) * 100) + '%';
-  if (elapsed >= total) show(index + 1);
+  if (REDUCED_MOTION) setProgress(elapsed / (CONFIG.interval * 1000));
+  if (elapsed >= CONFIG.interval * 1000) show(index + 1);
 }
 
 function tickClock() {
@@ -685,7 +739,12 @@ function tickClock() {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'ArrowRight') show(index + 1);
   if (event.key === 'ArrowLeft') show(index - 1);
-  if (event.key === ' ') { paused = !paused; slideStarted = Date.now(); }
+  if (event.key === ' ') {
+    paused = !paused;
+    slideStarted = Date.now();
+    if (paused) progress.style.animationPlayState = 'paused';
+    else restartProgress();
+  }
   if (event.key.toLowerCase() === 'f') {
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen();
@@ -693,7 +752,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 loadPosts(true);
-timer = setInterval(tick, 100);
+timer = setInterval(tick, 250);
 setInterval(tickClock, 1000);
 tickClock();
 setInterval(() => loadPosts(false), CONFIG.refresh * 1000);

@@ -367,7 +367,7 @@ def render_news_card(
     region: str | None = None,
     city: str | None = None,
     published_at: datetime | None = None,
-    channel_title: str = "Хороший полицейский",
+    channel_title: str = "Мы Вам Доверяем",
     source_name: str | None = None,
     output_path: str | Path | None = None,
 ) -> str | None:

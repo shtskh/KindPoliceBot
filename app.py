@@ -48,7 +48,7 @@ from storage.models import NewsStatus
 
 logger = setup_logging(settings.log_level, settings.log_to_file)
 
-app = FastAPI(title="Модерация — Добрые новости о полиции")
+app = FastAPI(title="Модерация — Мы Вам Доверяем")
 
 # Витрина для экрана (/screen) — публичная часть того же сервера:
 # показывает только опубликованные посты, пароля не требует.
@@ -107,7 +107,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Модерация — Хороший полицейский</title>
+<title>Модерация — Мы Вам Доверяем</title>
 <style>
   :root {{
     --bg: #f4f6fb;
@@ -229,7 +229,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     <div class="shield"></div>
     <div>
       <h1>Модерация новостей</h1>
-      <div class="sub">Хороший полицейский · панель курсанта</div>
+      <div class="sub">Мы Вам Доверяем · панель курсанта</div>
     </div>
   </header>
   {flash}
