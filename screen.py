@@ -44,7 +44,9 @@
 """
 from __future__ import annotations
 
+import html as html_escaping
 import json
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
@@ -58,6 +60,7 @@ from fastapi.responses import (
 from config import settings
 from logging_setup import get_logger
 from paths import resolve
+from pipeline.post_formatting import FOOTER_MARKER
 from storage import db
 
 logger = get_logger("screen")
@@ -90,10 +93,49 @@ def _place(item) -> str:
     return " · ".join(parts)
 
 
+# Ссылка целиком: на экране её не нажать, поэтому оставляем только
+# текст, который был внутри.
+_LINK_RE = re.compile(r"<a\b[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+# Любой тег, кроме <b> и <i>: эти два — единственное оформление,
+# которое имеет смысл на витрине.
+_OTHER_TAGS_RE = re.compile(r"</?(?![bi]\b)[a-zA-Z][^>]*>")
+
+
 def _post_text(item) -> str:
-    """Для экрана берём переписанный текст: исходный — это простыня
-    канцелярита, которую со стены не прочитать."""
-    return (item.rewritten_text or item.title or "").strip()
+    """
+    Текст поста для экрана: без подписи канала и без разметки.
+
+    Берём переписанный текст — исходный представляет собой простыню
+    канцелярита, которую со стены не прочитать. Подпись с ссылками на
+    канал и бота отрезаем: по ней со стены всё равно не кликнуть, а
+    рядом висит QR, ведущий туда же.
+    """
+    text = (item.rewritten_text or item.title or "").strip()
+    if FOOTER_MARKER in text:
+        text = text.split(FOOTER_MARKER, 1)[0]
+    text = _LINK_RE.sub(r"\1", text)
+    text = _OTHER_TAGS_RE.sub("", text)
+    return text.strip()
+
+
+def _post_markup(text: str) -> str:
+    """
+    Тот же текст, но с сохранённым выделением.
+
+    Страница вставляет это как разметку, поэтому экранируем всё, а
+    потом возвращаем ровно два тега. Текст приходит от языковой
+    модели, и пропускать его на страницу как есть нельзя.
+    """
+    safe = html_escaping.escape(text)
+    for tag in ("b", "i"):
+        safe = (safe.replace(f"&lt;{tag}&gt;", f"<{tag}>")
+                    .replace(f"&lt;/{tag}&gt;", f"</{tag}>"))
+    return safe
+
+
+def _plain_text(text: str) -> str:
+    """Текст без единого тега — для заголовка страницы и запаса."""
+    return re.sub(r"</?[bi]>", "", text, flags=re.IGNORECASE)
 
 
 def _media_kind(item) -> str | None:
@@ -132,7 +174,8 @@ def screen_data(
             continue
         posts.append({
             "id": item.id,
-            "text": text,
+            "text": _plain_text(text),
+            "html": _post_markup(text),
             "place": _place(item),
             "date": _format_date(item.published_at),
             "source": item.source_name or "",
@@ -325,8 +368,10 @@ PAGE_TEMPLATE = """<!doctype html>
     align-items: center;
   }
   .meta .dot { opacity: .45; }
-  /* Место под QR: без отступа строка с датой уезжала под карточку. */
-  .has-qr .meta { padding-right: 18vmin; }
+  /* Место под QR. Ширину карточки задаёт длина адреса канала, поэтому
+     отступ измеряется на странице (--qr-space), а значение в vmin
+     остаётся запасным на случай, если QR не загрузился. */
+  .has-qr .meta { padding-right: var(--qr-space, 20vmin); }
 
   /* Шапка и прогресс поверх кадра */
   .brand {
@@ -420,7 +465,6 @@ PAGE_TEMPLATE = """<!doctype html>
     .brand, .clock { font-size: 2.4vmin; }
     .counter { font-size: 2.2vmin; }
     .qr { right: 3.4vmin; bottom: 4vmin; gap: 2vmin; }
-    .has-qr .meta { padding-right: 26vmin; }
     .qr img { width: 17vmin; height: 17vmin; }
     .qr .caption { font-size: 2.3vmin; max-width: 30vmin; }
   }
@@ -450,10 +494,28 @@ const counter = document.getElementById('counter');
 const clock = document.getElementById('clock-time');
 document.getElementById('brand-title').textContent = CONFIG.title;
 
+const qrBox = document.getElementById('qr');
+
+function reserveQrSpace() {
+  if (!CONFIG.qr || qrBox.classList.contains('hidden')) return;
+  // Отступ строки с датой считаем по фактической ширине карточки:
+  // длинное имя канала делает её заметно шире, и строка уезжала
+  // под QR.
+  const width = qrBox.getBoundingClientRect().width;
+  if (width) {
+    document.documentElement.style.setProperty(
+      '--qr-space', Math.round(width + 28) + 'px');
+  }
+}
+
 if (CONFIG.qr) {
   document.getElementById('qr-link').textContent = CONFIG.link;
-  document.getElementById('qr').classList.remove('hidden');
+  qrBox.classList.remove('hidden');
   document.body.classList.add('has-qr');
+  reserveQrSpace();
+  // Размер меняется при повороте экрана и после загрузки картинки QR.
+  window.addEventListener('resize', reserveQrSpace);
+  qrBox.querySelector('img').addEventListener('load', reserveQrSpace);
 }
 
 let posts = [];
@@ -525,7 +587,9 @@ function buildSlide(post) {
 
   slide.innerHTML = media +
     '<div class="body">' + place +
-      '<div class="text">' + esc(post.text) + '</div>' +
+      // Разметку готовит сервер: там всё экранировано и оставлены
+      // только <b> и <i>. Поэтому здесь innerHTML безопасен.
+      '<div class="text">' + (post.html || esc(post.text)) + '</div>' +
       '<div class="meta">' + meta + '</div>' +
     '</div>';
   return slide;

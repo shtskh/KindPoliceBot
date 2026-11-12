@@ -1108,6 +1108,56 @@ def test_screen() -> None:
         check("медиа несуществующего поста недоступно",
               client.get("/screen/media/нет-такого").status_code == 404)
 
+        # --- текст поста: без подписи канала и без лишней разметки ---
+        from pipeline.post_formatting import FOOTER_MARKER
+
+        add("pub-3", NewsStatus.PUBLISHED, region="Краснодарский край",
+            rewritten_text=(
+                "Двое полицейских <i>края</i> <b>получили медали</b>: "
+                "один вытащил тонущего мужчину." + FOOTER_MARKER
+                + "📌 <a href=\"https://max.ru/x\">Добрые новости</a>"))
+
+        post = next(p for p in client.get("/screen/data").json()["posts"]
+                    if p["id"] == "pub-3")
+
+        # Подпись — часть поста в мессенджере: со стены по ней не
+        # кликнуть, а рядом висит QR, ведущий туда же.
+        check("подпись канала отрезана",
+              "max.ru" not in post["text"] and "📌" not in post["text"],
+              post["text"])
+        check("ссылка не показана тегом",
+              "<a" not in post["html"] and "href" not in post["html"],
+              post["html"])
+        check("текст без разметки чистый",
+              "<b>" not in post["text"] and "<i>" not in post["text"],
+              post["text"])
+        check("выделение сохранено разметкой",
+              "<b>получили медали</b>" in post["html"]
+              and "<i>края</i>" in post["html"], post["html"])
+
+        # Текст приходит от языковой модели и вставляется в страницу
+        # как разметка: всё, кроме <b> и <i>, обязано быть экранировано.
+        add("pub-4", NewsStatus.PUBLISHED,
+            rewritten_text="<script>alert(1)</script> и <b>жирный</b>")
+        risky = next(p for p in client.get("/screen/data").json()["posts"]
+                     if p["id"] == "pub-4")
+        # Чужие теги вырезаются целиком, а не экранируются: показывать
+        # на экране «<script>» тоже незачем.
+        check("опасный тег вырезан",
+              "<script" not in risky["html"]
+              and "script" not in risky["html"], risky["html"])
+        check("безопасное выделение уцелело",
+              "<b>жирный</b>" in risky["html"], risky["html"])
+
+        # Одиночная угловая скобка — не тег, но в разметку её пускать
+        # нельзя: браузер начнёт искать закрывающую.
+        add("pub-5", NewsStatus.PUBLISHED,
+            rewritten_text="Задержан в 5 < 7 минутах от места происшествия")
+        sharp = next(p for p in client.get("/screen/data").json()["posts"]
+                     if p["id"] == "pub-5")
+        check("одиночная скобка экранирована",
+              "&lt;" in sharp["html"], sharp["html"])
+
         page = client.get("/screen")
         check("страница отдаётся", page.status_code == 200)
         check("страница самодостаточна: без внешних загрузок",
