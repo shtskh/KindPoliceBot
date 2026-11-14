@@ -1179,6 +1179,25 @@ def test_screen() -> None:
         check("кегль подгоняется под длину текста",
               "function fitText" in page.text
               and "scrollHeight" in page.text)
+
+        # Монограмма в углу: по строке на слово названия, первая буква
+        # золотая с обводкой. Строится из CHANNEL_TITLE, поэтому буквы
+        # не вшиты в разметку — иначе следующее переименование их бы
+        # не затронуло.
+        saved_title = settings.channel_title
+        settings.channel_title = "Мы Вам Доверяем"
+        try:
+            branded = client.get("/screen").text
+            check("название передано на страницу",
+                  '"title": "Мы Вам Доверяем"' in branded
+                  or '"title":"Мы Вам Доверяем"' in branded)
+            check("монограмма строится из названия",
+                  "drawBrand" in branded and "data-letter" in branded)
+            check("первая буква золотая с обводкой",
+                  "background-clip: text" in branded
+                  and "-webkit-text-stroke" in branded)
+        finally:
+            settings.channel_title = saved_title
         check("страница самодостаточна: без внешних загрузок",
               "http://" not in page.text.replace("http://www.w3.org", "")
               and "cdn" not in page.text.lower())

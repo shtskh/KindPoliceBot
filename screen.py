@@ -392,22 +392,59 @@ PAGE_TEMPLATE = """<!doctype html>
   .has-qr .body { padding-bottom: var(--qr-bottom, 4vmin); }
 
   /* Шапка и прогресс поверх кадра */
+  /* Название в левом верхнем углу: по строке на слово, первые буквы
+     складываются в МВД. Поэтому они крупные, золотые и с обводкой, а
+     остаток слова — обычным светлым текстом. */
   .brand {
     position: absolute;
-    top: 3.2vmin; left: 3.4vmin;
-    display: flex; align-items: center; gap: 1.4vmin;
-    padding: 1.1vmin 2vmin;
-    background: rgba(8, 12, 26, .62);
-    border-radius: 999px;
-    font-size: 1.9vmin;
-    font-weight: 700;
-    letter-spacing: .04em;
-    backdrop-filter: blur(6px);
+    top: 3vmin; left: 3.4vmin;
+    padding: 1.6vmin 2.6vmin 1.8vmin 2vmin;
+    border-radius: 1.6vmin;
+    /* Подложка-растушёвка, а не плашка: название лежит поверх снимка,
+       и ровный прямоугольник спорил бы с кадром. */
+    background: radial-gradient(130% 120% at 0% 0%,
+                rgba(6, 10, 22, .78) 0%, rgba(6, 10, 22, .55) 55%,
+                rgba(6, 10, 22, 0) 100%);
+    line-height: 1.02;
+    user-select: none;
   }
-  .brand .mark {
-    width: 1.5vmin; height: 1.5vmin;
-    border-radius: 50%;
-    background: var(--accent);
+  .brand-line {
+    display: flex;
+    align-items: baseline;
+    white-space: nowrap;
+  }
+  .brand .initial {
+    position: relative;
+    display: inline-block;
+    font-size: 5.2vmin;
+    font-weight: 800;
+    letter-spacing: -.01em;
+    /* Золото — не плоский цвет, а градиент с бликом: иначе буква
+       выглядит просто жёлтой. */
+    background: linear-gradient(158deg,
+                #fff6d0 0%, #f2d27a 18%, #c9971f 42%,
+                #8a6a1f 58%, #e8c45f 78%, #b8860b 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  /* Обводка — отдельная копия буквы позади: если обвести саму букву,
+     штрих ложится поверх золота и съедает блик. */
+  .brand .initial::after {
+    content: attr(data-letter);
+    position: absolute;
+    left: 0; top: 0;
+    z-index: -1;
+    color: transparent;
+    -webkit-text-stroke: .62vmin #05070f;
+    text-shadow: 0 .3vmin .7vmin rgba(0, 0, 0, .55);
+  }
+  .brand .rest {
+    font-size: 2.9vmin;
+    font-weight: 600;
+    letter-spacing: .02em;
+    color: #f2f5ff;
+    text-shadow: 0 .2vmin .6vmin rgba(0, 0, 0, .75);
   }
   .clock {
     position: absolute;
@@ -493,7 +530,9 @@ PAGE_TEMPLATE = """<!doctype html>
        коротким постом остаётся половина пустого экрана. */
     .body { justify-content: center; }
     .meta { margin-top: 3vmin; }
-    .brand, .clock { font-size: 2.4vmin; }
+    .brand .initial { font-size: 7.4vmin; }
+    .brand .rest { font-size: 4vmin; }
+    .clock { font-size: 2.4vmin; }
     .counter { font-size: 2.2vmin; }
     .qr { right: 3.4vmin; bottom: 4vmin; gap: 2vmin; }
     .qr img { width: 17vmin; height: 17vmin; }
@@ -505,7 +544,7 @@ PAGE_TEMPLATE = """<!doctype html>
   <div id="stage">
     <div id="notice" class="notice">Загружаем новости…</div>
   </div>
-  <div class="brand"><span class="mark"></span><span id="brand-title"></span></div>
+  <div class="brand" id="brand"></div>
   <div class="clock">
     <span class="counter" id="counter"></span><span class="sep">·</span><span id="clock-time"></span>
   </div>
@@ -523,7 +562,22 @@ const notice = document.getElementById('notice');
 const progress = document.getElementById('progress');
 const counter = document.getElementById('counter');
 const clock = document.getElementById('clock-time');
-document.getElementById('brand-title').textContent = CONFIG.title;
+// Монограмма строится из названия канала: слово — строка, первая
+// буква — крупная и золотая. Название задаётся настройкой
+// CHANNEL_TITLE, поэтому вшивать буквы в разметку нельзя.
+(function drawBrand() {
+  const box = document.getElementById('brand');
+  const words = (CONFIG.title || '').split(/\s+/).filter(Boolean);
+  box.innerHTML = words.map(word => {
+    const first = word.slice(0, 1);
+    const rest = word.slice(1);
+    return '<div class="brand-line">'
+         + '<span class="initial" data-letter="' + esc(first) + '">'
+         + esc(first) + '</span>'
+         + (rest ? '<span class="rest">' + esc(rest) + '</span>' : '')
+         + '</div>';
+  }).join('');
+})();
 
 const qrBox = document.getElementById('qr');
 
