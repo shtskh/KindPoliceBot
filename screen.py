@@ -76,6 +76,62 @@ _MONTHS_RU = (
 _VIDEO_SUFFIXES = (".mp4", ".webm", ".mov")
 
 
+# --------------------------------------------------------------------------
+# Шрифт монограммы
+# --------------------------------------------------------------------------
+#
+# Узкий гротеск с крупными прописными — тот самый вид, что у вывесок и
+# ведомственных табличек. Bebas Neue, с которого начинали, пришлось
+# отклонить: у него нет кириллицы (проверено у Google Fonts — только
+# latin и latin-ext), и буквы М, В, Д подменялись бы системным
+# шрифтом. Oswald той же породы и кириллицу содержит.
+#
+# Файлы лежат в репозитории и вшиваются в страницу: витрина обязана
+# работать на экране в сети без интернета, а обращение к шрифтовому
+# CDN сделало бы её зависимой от внешнего адреса.
+
+_FONT_FILES = (
+    ("oswald-600-cyrillic.woff2",
+     "U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116"),
+    ("oswald-600-latin.woff2",
+     "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, "
+     "U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, "
+     "U+2212, U+2215, U+FEFF, U+FFFD"),
+)
+
+_font_css_cache: str | None = None
+
+
+def _font_css() -> str:
+    """@font-face с файлами шрифта внутри страницы."""
+    global _font_css_cache
+    if _font_css_cache is not None:
+        return _font_css_cache
+
+    import base64
+
+    rules = []
+    for name, unicode_range in _FONT_FILES:
+        path = resolve(f"assets/fonts/{name}")
+        try:
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError as exc:
+            # Без шрифта витрина должна работать: сработает запасной
+            # системный гротеск, просто вид будет проще.
+            logger.warning("Шрифт %s недоступен (%s) — беру системный.",
+                           name, exc)
+            continue
+        rules.append(
+            "@font-face{font-family:'Screen Display';font-style:normal;"
+            "font-weight:600;font-display:block;"
+            f"src:url(data:font/woff2;base64,{encoded}) format('woff2');"
+            f"unicode-range:{unicode_range};}}"
+        )
+
+    _font_css_cache = "\n".join(rules)
+    return _font_css_cache
+
+
 def _format_date(value: datetime | None) -> str:
     if not value:
         return ""
@@ -256,7 +312,8 @@ def screen_page(
         "qr": bool(settings.screen_qr_enabled and settings.screen_link),
         "link": _link_label(settings.screen_link),
     }
-    return HTMLResponse(PAGE_TEMPLATE.replace(
+    page = PAGE_TEMPLATE.replace("__FONTS__", _font_css())
+    return HTMLResponse(page.replace(
         "__CONFIG__", json.dumps(config, ensure_ascii=False)
     ))
 
@@ -276,6 +333,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Мы Вам Доверяем</title>
 <style>
+__FONTS__
   :root {
     --bg: #0b1020;
     --panel: rgba(10, 16, 34, 0.82);
@@ -405,17 +463,23 @@ PAGE_TEMPLATE = """<!doctype html>
     background: radial-gradient(130% 120% at 0% 0%,
                 rgba(6, 10, 22, .78) 0%, rgba(6, 10, 22, .55) 55%,
                 rgba(6, 10, 22, 0) 100%);
-    line-height: 1.02;
+    line-height: 1;
     user-select: none;
-  }
-  .brand-line {
-    display: flex;
+    /* Сетка из двух колонок: все первые буквы попадают в одну и ту же
+       колонку, поэтому стоят строго друг под другом, а остатки слов
+       начинаются с одной линии. Выравнивать отступами не вышло бы:
+       М, В и Д разной ширины. */
+    display: grid;
+    grid-template-columns: max-content max-content;
+    column-gap: 0.04em;
+    row-gap: 0.06em;
     align-items: baseline;
-    white-space: nowrap;
   }
   .brand .initial {
     position: relative;
     display: inline-block;
+    font-family: 'Screen Display', 'Oswald', 'PT Sans Narrow',
+                 'Arial Narrow', sans-serif;
     font-size: 5.2vmin;
     font-weight: 800;
     letter-spacing: -.01em;
@@ -440,7 +504,11 @@ PAGE_TEMPLATE = """<!doctype html>
     text-shadow: 0 .3vmin .7vmin rgba(0, 0, 0, .55);
   }
   .brand .rest {
-    font-size: 2.9vmin;
+    font-family: 'Screen Display', 'Oswald', 'PT Sans Narrow',
+                 'Arial Narrow', sans-serif;
+    font-size: 3.4vmin;
+    letter-spacing: .03em;
+    align-self: baseline;
     font-weight: 600;
     letter-spacing: .02em;
     color: #f2f5ff;
@@ -571,11 +639,11 @@ const clock = document.getElementById('clock-time');
   box.innerHTML = words.map(word => {
     const first = word.slice(0, 1);
     const rest = word.slice(1);
-    return '<div class="brand-line">'
-         + '<span class="initial" data-letter="' + esc(first) + '">'
+    // Две ячейки сетки на слово: буква и остаток. Пустая ячейка нужна
+    // даже для слова из одной буквы, иначе строки съедут.
+    return '<span class="initial" data-letter="' + esc(first) + '">'
          + esc(first) + '</span>'
-         + (rest ? '<span class="rest">' + esc(rest) + '</span>' : '')
-         + '</div>';
+         + '<span class="rest">' + esc(rest) + '</span>';
   }).join('');
 })();
 

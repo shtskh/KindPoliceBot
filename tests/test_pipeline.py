@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import re
 import shutil
 import tempfile
 import traceback
@@ -1196,11 +1197,24 @@ def test_screen() -> None:
             check("первая буква золотая с обводкой",
                   "background-clip: text" in branded
                   and "-webkit-text-stroke" in branded)
+            # Буквы стоят друг под другом за счёт сетки: отступами это
+            # не сделать, М, В и Д разной ширины.
+            check("монограмма выровнена сеткой",
+                  "grid-template-columns: max-content max-content" in branded)
+            check("монограмма набрана узким гротеском",
+                  "'Screen Display'" in branded)
         finally:
             settings.channel_title = saved_title
+        # Шрифт вшит в страницу как data-URI, и в его base64 случайно
+        # встречаются любые буквосочетания — проверять надо разметку,
+        # а не двоичные данные.
+        markup = re.sub(r"data:font/woff2;base64,[A-Za-z0-9+/=]+", "", page.text)
         check("страница самодостаточна: без внешних загрузок",
-              "http://" not in page.text.replace("http://www.w3.org", "")
-              and "cdn" not in page.text.lower())
+              "http://" not in markup.replace("http://www.w3.org", "")
+              and "https://" not in markup
+              and "cdn" not in markup.lower(), markup[:0])
+        check("шрифт вшит в страницу, а не подгружается",
+              "@font-face" in page.text and "data:font/woff2;base64," in page.text)
         check("интервал подставлен в страницу",
               f'"interval": {settings.screen_interval_seconds}' in page.text
               or f'"interval":{settings.screen_interval_seconds}' in page.text)
