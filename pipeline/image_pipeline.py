@@ -240,6 +240,97 @@ def _scene_text(item: NewsItem) -> str:
 # Скачивание оригинального фото
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# Отсев гербов, схем и мелких картинок
+# --------------------------------------------------------------------------
+#
+# На страницах МВД рядом с новостью лежат гербы регионов, эмблемы
+# управлений, плакаты-памятки и фотороботы. По имени файла их не
+# поймать: «GU_MVD_Rossii_po_Krasnodarskomu_krayu_kopiya.png» — это
+# герб весом 747 КБ, а «PcwVWc0MDa.png» — эмблема. Поэтому смотрим на
+# само изображение.
+#
+# Пороги подобраны на живых картинках с сайтов МВД: у гербов
+# прозрачный фон либо однотонная рамка, у плакатов и фотороботов —
+# считанные цвета, у настоящих снимков рамка пёстрая (0.09–0.38) и
+# цветов за полсотни.
+
+# Ниже этих размеров снимок не годится даже для телефона.
+MIN_PHOTO_SHORT_SIDE = 420
+MIN_PHOTO_LONG_SIDE = 700
+
+# Однотонная рамка + большая доля одного цвета = герб или эмблема.
+GRAPHIC_BORDER_SHARE = 0.60
+GRAPHIC_TOP_COLOR_SHARE = 0.30
+# Меньше этого числа оттенков бывает у схем, плакатов и фотороботов.
+GRAPHIC_MIN_COLORS = 26
+
+
+def looks_like_graphic(content: bytes) -> str | None:
+    """
+    Почему эту картинку нельзя ставить в пост. None — можно.
+
+    Без Pillow проверка пропускается: лучше поставить что-то, чем
+    ничего.
+    """
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover
+        return None
+
+    try:
+        with Image.open(io.BytesIO(content)) as image:
+            image.load()
+            width, height = image.size
+
+            if min(width, height) < MIN_PHOTO_SHORT_SIDE or                     max(width, height) < MIN_PHOTO_LONG_SIDE:
+                return f"мелкое изображение {width}x{height}"
+
+            # Прозрачный фон бывает у эмблем и логотипов, у снимков — нет.
+            if image.mode in ("RGBA", "LA") or "transparency" in image.info:
+                alpha = image.convert("RGBA").getchannel("A")
+                if alpha.getextrema()[0] < 250:
+                    return "прозрачный фон — это эмблема, а не снимок"
+
+            thumb = image.convert("RGB").resize((96, 96), Image.BILINEAR)
+    except Exception as exc:
+        logger.debug("Не удалось разобрать изображение: %s", exc)
+        return None
+
+    # Квантуем по 32 уровня на канал: мелкие градации неинтересны,
+    # важно общее разнообразие.
+    pixels = [(r // 32, g // 32, b // 32) for r, g, b in thumb.getdata()]
+    counts: dict = {}
+    for colour in pixels:
+        counts[colour] = counts.get(colour, 0) + 1
+
+    edge = ([pixels[i] for i in range(96)]
+            + [pixels[-(i + 1)] for i in range(96)]
+            + [pixels[i * 96] for i in range(96)]
+            + [pixels[i * 96 + 95] for i in range(96)])
+    edge_counts: dict = {}
+    for colour in edge:
+        edge_counts[colour] = edge_counts.get(colour, 0) + 1
+
+    border_share = max(edge_counts.values()) / len(edge)
+    top_share = max(counts.values()) / len(pixels)
+
+    if border_share >= GRAPHIC_BORDER_SHARE and top_share >= GRAPHIC_TOP_COLOR_SHARE:
+        return (f"однотонный фон (рамка {border_share:.0%}, "
+                f"основной цвет {top_share:.0%}) — герб или эмблема")
+
+    # Мало полутонов — это схема, плакат или фоторобот. Одного этого
+    # признака мало: снимок в тумане или на снегу тоже беден на цвета,
+    # поэтому требуем вдобавок ровный фон. Ошибиться здесь не страшно
+    # (вместо снимка будет нарисованная иллюстрация), но терять живые
+    # кадры незачем.
+    if len(counts) < GRAPHIC_MIN_COLORS and (border_share >= 0.45
+                                             or top_share >= 0.35):
+        return f"почти без полутонов ({len(counts)} оттенков) — схема или плакат"
+
+    return None
+
+
 def _try_download(url: str) -> str | None:
     """
     Скачивает фото из источника и нормализует его под требования Telegram.
@@ -289,6 +380,15 @@ def _try_download(url: str) -> str | None:
 
     except requests.RequestException as exc:
         logger.info("Не удалось скачать фото %s: %s", url[:120], exc)
+        return None
+
+    # Герб региона вместо фотографии с места события — хуже, чем
+    # нарисованная иллюстрация: он ничего не рассказывает о новости.
+    # Отказ здесь означает, что пайплайн возьмёт следующий снимок со
+    # страницы, а если подходящих нет — сгенерирует кадр по смыслу.
+    reason = looks_like_graphic(content)
+    if reason:
+        logger.info("Снимок не подошёл (%s): %s", reason, url[:120])
         return None
 
     return _store_image_bytes(content, prefix=f"src_{digest}")

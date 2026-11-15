@@ -1367,6 +1367,90 @@ def test_live_delivery() -> None:
          orch.process_raw_item, orch.db.init_db) = saved
 
 
+# ==========================================================================
+# 19. Отсев гербов и мелких картинок
+# ==========================================================================
+
+def test_graphic_filter() -> None:
+    """
+    На страницах МВД рядом с новостью лежат гербы, эмблемы, плакаты и
+    фотороботы. По имени файла их не поймать: герб Краснодарского края
+    назывался GU_MVD_Rossii_po_Krasnodarskomu_krayu_kopiya.png и весил
+    747 КБ. Пороги проверены на живых картинках с сайтов МВД.
+    """
+    from io import BytesIO
+
+    from pipeline.image_pipeline import looks_like_graphic
+    from pipeline.image_render import CARD_RENDER_AVAILABLE
+
+    section("Отсев гербов и мелких картинок")
+
+    if not CARD_RENDER_AVAILABLE:
+        check("Pillow доступен", False, "без Pillow проверка не работает")
+        return
+
+    from PIL import Image, ImageDraw
+
+    def to_bytes(image, fmt="JPEG"):
+        buffer = BytesIO()
+        image.save(buffer, fmt, quality=92)
+        return buffer.getvalue()
+
+    def photo(width=1200, height=900):
+        # Модель фотографии — КРУПНАЯ структура: цветовые пятна и
+        # градиент. Пиксельный шум не годится: при уменьшении до
+        # эскиза он усредняется в ровный серый, и такая «фотография»
+        # выглядит беднее настоящего герба.
+        small = Image.frombytes("RGB", (24, 18), os.urandom(24 * 18 * 3))
+        image = small.resize((width, height), Image.BICUBIC)
+        draw = ImageDraw.Draw(image)
+        for i in range(12):
+            box = [width * i // 14, height * (i % 5) // 7,
+                   width * (i + 2) // 14, height * (i % 5 + 3) // 7]
+            draw.ellipse(box, outline=(20 * i % 255, 255 - 9 * i, 40 + 7 * i),
+                         width=max(3, height // 90))
+        return image
+
+    def emblem(width=900, height=1200, background=(255, 255, 255)):
+        image = Image.new("RGB", (width, height), background)
+        draw = ImageDraw.Draw(image)
+        draw.ellipse([width // 4, height // 4, width * 3 // 4, height * 3 // 4],
+                     fill=(190, 30, 45), outline=(240, 200, 60), width=14)
+        draw.rectangle([width // 3, height // 2, width * 2 // 3, height * 3 // 4],
+                       fill=(240, 200, 60))
+        return image
+
+    check("настоящий снимок проходит",
+          looks_like_graphic(to_bytes(photo())) is None,
+          str(looks_like_graphic(to_bytes(photo()))))
+
+    reason = looks_like_graphic(to_bytes(emblem()))
+    check("герб на белом фоне отсеивается", reason is not None, str(reason))
+
+    reason = looks_like_graphic(to_bytes(emblem(background=(246, 248, 251))))
+    check("герб на светлом фоне тоже отсеивается", reason is not None, str(reason))
+
+    # Эмблемы часто приходят PNG с прозрачностью.
+    transparent = Image.new("RGBA", (900, 1200), (0, 0, 0, 0))
+    ImageDraw.Draw(transparent).ellipse([200, 300, 700, 900],
+                                        fill=(190, 30, 45, 255))
+    buffer = BytesIO()
+    transparent.save(buffer, "PNG")
+    reason = looks_like_graphic(buffer.getvalue())
+    check("прозрачный фон отсеивается", reason is not None, str(reason))
+    check("причина названа прямо", "эмблема" in (reason or ""), str(reason))
+
+    # Мелкое фото не годится даже на телефоне, не то что на витрине.
+    reason = looks_like_graphic(to_bytes(photo(320, 240)))
+    check("мелкое изображение отсеивается", reason is not None, str(reason))
+    reason = looks_like_graphic(to_bytes(photo(1200, 380)))
+    check("узкая полоска отсеивается", reason is not None, str(reason))
+
+    # Битые данные не должны ронять сбор.
+    check("мусор вместо картинки не роняет проверку",
+          looks_like_graphic("не картинка вовсе".encode()) is None)
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
@@ -1374,7 +1458,7 @@ def main() -> int:
         test_assistant, test_audience_and_content, test_ranking,
         test_media, test_footer_title, test_image_generation,
         test_model_compatibility, test_screen, test_db_path,
-        test_live_delivery,
+        test_live_delivery, test_graphic_filter,
     )
 
     for test in tests:
