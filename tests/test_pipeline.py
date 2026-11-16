@@ -1451,6 +1451,89 @@ def test_graphic_filter() -> None:
           looks_like_graphic("не картинка вовсе".encode()) is None)
 
 
+# ==========================================================================
+# 20. Донорские акции и форма по службам
+# ==========================================================================
+
+def test_donation_and_uniform() -> None:
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from pipeline.image_prompt import detect_unit, prompt_suffix
+    from pipeline.verify import verify_news_item
+    from storage.models import NewsItem
+
+    section("Донорские акции и форма по службам")
+
+    def news(text: str) -> NewsItem:
+        return NewsItem(
+            id="x", source_name="МВД", source_url="https://мвд.рф/news/1",
+            title=text, raw_text=text * 3,
+            published_at=datetime.now(timezone.utc),
+        )
+
+    # Сдача крови сотрудниками — регулярная ведомственная повестка, и
+    # поток таких публикаций вытесняет настоящие истории.
+    blood = verify_news_item(news(
+        "Сотрудники управления сдали кровь в рамках дня донора, "
+        "акция прошла в областном центре переливания крови."))
+    check("донорская акция отсеивается", not blood.passed, blood.notes)
+    check("причина названа кодом", blood.reject_code == "blood_drive",
+          str(blood.reject_code))
+
+    # Костный мозг — другое дело: это редкий поступок, часто с
+    # конкретным спасённым человеком.
+    marrow = verify_news_item(news(
+        "Полицейский стал донором костного мозга и спас жизнь "
+        "незнакомому ребёнку из другого региона страны."))
+    check("донорство костного мозга проходит дальше",
+          marrow.reject_code != "blood_drive", str(marrow.reject_code))
+
+    # Соседний случай: кровь упомянута, но новость не об акции.
+    rescue = verify_news_item(news(
+        "Полицейский остановил кровь пострадавшему в ДТП до приезда "
+        "скорой помощи и тем самым спас ему жизнь."))
+    check("остановка крови при ДТП не считается акцией",
+          rescue.reject_code != "blood_drive", str(rescue.reject_code))
+
+    # --- форма по службам ---
+    def look_for(title: str) -> tuple:
+        return detect_unit(SimpleNamespace(
+            title=title, raw_text="", rewritten_text=""))
+
+    unit, look = look_for("Инспекторы ДПС доставили ребёнка в больницу")
+    check("ДПС распознаётся", unit == "ДПС", str(unit))
+    # Без салатового жилета инспектор на снимке с дороги на себя не похож.
+    check("у ДПС есть светоотражающий жилет",
+          "lime-yellow" in look and "reflective" in look, look[:80])
+    check("у ДПС есть патрульная машина", "patrol car" in look, look[:80])
+
+    unit, look = look_for("Участковый уполномоченный нашёл подростка")
+    check("участковый распознаётся", unit == "участковый", str(unit))
+    check("участковый без тактической экипировки",
+          "no tactical gear" in look, look[:80])
+
+    unit, look = look_for("Кинолог со служебной собакой отыскал грибника")
+    check("кинолог распознаётся", unit == "кинолог", str(unit))
+    check("у кинолога есть собака", "shepherd" in look, look[:80])
+
+    unit, look = look_for("Патрульный наряд полиции спас женщину из огня")
+    check("ППС распознаётся", unit == "ППС", str(unit))
+    check("у ППС бронежилет и рация",
+          "protective vests" in look and "radio" in look, look[:80])
+
+    unit, look = look_for("Полицейские вынесли женщину из горящего дома")
+    check("без признаков службы — общее описание", unit is None, str(unit))
+
+    # Экипировка должна попадать в итоговый промпт.
+    _, dps_look = look_for("Инспекторы ДПС перекрыли движение")
+    check("экипировка попадает в промпт",
+          "lime-yellow" in prompt_suffix(dps_look))
+    check("запрет на читаемые знаки различия остался",
+          "not legible" in prompt_suffix(dps_look)
+          or "No lettering" in prompt_suffix(dps_look))
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
@@ -1459,6 +1542,7 @@ def main() -> int:
         test_media, test_footer_title, test_image_generation,
         test_model_compatibility, test_screen, test_db_path,
         test_live_delivery, test_graphic_filter,
+        test_donation_and_uniform,
     )
 
     for test in tests:

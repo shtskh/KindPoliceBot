@@ -64,8 +64,8 @@ SYSTEM_PROMPT = """
 ОБЯЗАТЕЛЬНЫЕ ОГРАНИЧЕНИЯ (нарушать нельзя)
 - Люди только со спины, издалека или не в фокусе. Никаких узнаваемых
   лиц и портретов крупным планом.
-- Форму описывай так: "dark navy blue Russian police uniform, peaked
-  cap, shoulder boards". {insignia_rule}
+- Форму не придумывай: как одеты сотрудники, сказано ниже в задании —
+  повтори это описание своими словами. {insignia_rule}
 - Не описывай номера машин.
 - Никакой крови, травм, тел, оружия в действии, огнестрельных ран.
 - Не придумывай деталей, которых нет в новости.
@@ -102,28 +102,29 @@ _SUFFIX_BASE = (
     "No recognizable faces, no close-up portraits. "
     "No blood, no injuries, no weapons."
 )
+# Общая часть про символику: экипировку подставляет detect_unit,
+# а вот знаки различия в любом случае остаются неразборчивыми.
 _SUFFIX_NO_INSIGNIA = (
-    "Officers in dark navy blue Russian police uniform with peaked cap and "
-    "shoulder boards, seen from behind or at a distance so that emblems, "
-    "patches and lettering are not legible. "
+    "Seen from behind or at a distance so that emblems, patches and "
+    "lettering are not legible. "
     "No text, no letters, no logos, no watermarks."
 )
 _SUFFIX_WITH_INSIGNIA = (
-    "Officers in the authentic dark navy blue uniform of the Russian "
-    "police: peaked cap with cockade, shoulder boards, sleeve patch. "
-    "No lettering, no watermarks."
+    "Peaked cap with cockade, shoulder boards and sleeve patch may be "
+    "visible. No lettering, no watermarks."
 )
 
 
-def prompt_suffix() -> str:
+def prompt_suffix(unit_look: str | None = None) -> str:
     """
     Хвост, который добавляется к любому промпту: повторяет ключевые
     требования на языке генератора, потому что часть моделей следует
     финальным указаниям охотнее, чем середине описания.
     """
-    if settings.ai_image_show_insignia:
-        return f"{_SUFFIX_BASE} {_SUFFIX_WITH_INSIGNIA}"
-    return f"{_SUFFIX_BASE} {_SUFFIX_NO_INSIGNIA}"
+    look = unit_look or _UNIT_DEFAULT
+    tail = (_SUFFIX_WITH_INSIGNIA if settings.ai_image_show_insignia
+            else _SUFFIX_NO_INSIGNIA)
+    return f"{_SUFFIX_BASE} {look} {tail}"
 
 
 def system_prompt() -> str:
@@ -138,6 +139,96 @@ FALLBACK_TEMPLATE = (
 )
 
 _NONE_RE = re.compile(r"^\s*none\s*$", re.IGNORECASE)
+
+
+# --------------------------------------------------------------------------
+# Форма по службам
+# --------------------------------------------------------------------------
+#
+# «Тёмно-синяя форма» для всех подряд — неправда: инспектор ДПС без
+# салатового жилета со светоотражающими полосами на снимке с дороги не
+# похож на себя, а участковый в бронежилете похож на патрульного.
+# Поэтому служба определяется по тексту новости, и генератору уходит
+# описание именно её экипировки.
+#
+# Признаки взяты по открытым материалам пресс-служб МВД: у ДПС это
+# салатовый жилет с широкими серыми светоотражающими полосами поверх
+# тёмной куртки и патрульный автомобиль с сине-белой окраской, у ППС —
+# тёмный бронежилет и рация, у участкового — повседневная форма с
+# папкой, у кинолога — полевая форма и служебная собака.
+#
+# Знаки различия по-прежнему остаются вне фокуса: ведомственную
+# символику генератор воспроизводит неточно (см. комментарий ниже).
+
+_UNIT_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (
+        ("дпс", "госавтоинспек", "автоинспек", "гибдд", "инспектор дорожн",
+         "дорожно-патрульн", "на трассе", "на дороге остановил"),
+        "ДПС",
+        "Traffic police officers in dark navy uniform wearing "
+        "high-visibility lime-yellow safety vests with wide grey "
+        "reflective stripes over the jacket, peaked caps; a white and "
+        "blue patrol car with a blue light bar nearby.",
+    ),
+    (
+        ("патрульно-постов", "ппс", "патрульный наряд", "наряд полиции",
+         "патрулировани"),
+        "ППС",
+        "Patrol officers in dark navy uniform with dark protective vests "
+        "over the jacket and a radio on the shoulder, peaked caps, on "
+        "foot in a city street.",
+    ),
+    (
+        ("участков", "уполномоченный полиции"),
+        "участковый",
+        "A district police officer in everyday dark navy uniform with a "
+        "peaked cap and a document folder, no tactical gear, at the "
+        "entrance of a residential building.",
+    ),
+    (
+        ("кинолог", "служебная собака", "служебной собаки", "овчарк"),
+        "кинолог",
+        "A police dog handler in dark navy field uniform — jacket, "
+        "trousers tucked into boots — with a German shepherd on a lead.",
+    ),
+    (
+        ("следовател", "уголовного розыска", "оперуполномоч", "сыщик"),
+        "розыск",
+        "Plain-clothes officers in dark civilian jackets, no uniform "
+        "details visible.",
+    ),
+    (
+        ("курсант", "вуз мвд", "института мвд", "университета мвд",
+         "академии мвд", "слушател"),
+        "курсанты",
+        "Cadets of a police academy in dark navy dress uniform with "
+        "peaked caps, lined up outdoors in front of a institute building.",
+    ),
+)
+
+# Если службу определить не удалось.
+_UNIT_DEFAULT = (
+    "Officers in dark navy blue Russian police uniform with peaked cap "
+    "and shoulder boards."
+)
+
+
+def detect_unit(item) -> tuple[str | None, str]:
+    """
+    Служба из текста новости и описание её экипировки для генератора.
+
+    Возвращает (название службы или None, описание на английском).
+    """
+    haystack = " ".join(
+        part.lower() for part in
+        (getattr(item, "title", ""), getattr(item, "raw_text", ""),
+         getattr(item, "rewritten_text", "") or "")
+        if part
+    )
+    for keywords, name, description in _UNIT_RULES:
+        if any(word in haystack for word in keywords):
+            return name, description
+    return None, _UNIT_DEFAULT
 
 
 def _season_hint(month: int) -> str:
@@ -170,17 +261,23 @@ def build_image_prompt(item) -> str | None:
 
     month = getattr(getattr(item, "published_at", None), "month", 6) or 6
 
+    # Экипировка зависит от службы: инспектор ДПС без
+    # салатового жилета на снимке с дороги на себя не похож.
+    unit, unit_look = detect_unit(item)
+    suffix = prompt_suffix(unit_look)
+
     if not settings.ai_configured:
         logger.info("Нет ключа AI — беру обобщённое описание кадра.")
         return FALLBACK_TEMPLATE.format(
-            season=_season_hint(month), suffix=prompt_suffix()
+            season=_season_hint(month), suffix=suffix
         )
 
     place = " · ".join(p for p in (getattr(item, "city", None),
                                    getattr(item, "region", None)) if p)
     user_prompt = (
         f"Место события: {place or 'не указано'}\n"
-        f"Время года: {_season_hint(month)}\n\n"
+        f"Время года: {_season_hint(month)}\n"
+        f"Как одеты сотрудники: {unit_look}\n\n"
         f"Новость:\n{source_text[:MAX_NEWS_CHARS]}"
     )
 
@@ -198,7 +295,7 @@ def build_image_prompt(item) -> str | None:
     except AIProviderError as exc:
         logger.warning("Не удалось сочинить кадр (%s) — беру обобщённый.", exc)
         return FALLBACK_TEMPLATE.format(
-            season=_season_hint(month), suffix=prompt_suffix()
+            season=_season_hint(month), suffix=suffix
         )
 
     scene = _clean(scene)
@@ -207,6 +304,7 @@ def build_image_prompt(item) -> str | None:
         logger.info("Модель решила, что иллюстрировать нечего — будет карточка.")
         return None
 
-    prompt = f"{scene} {prompt_suffix()}"
-    logger.info("Кадр для генерации: %s", scene[:120])
+    prompt = f"{scene} {suffix}"
+    logger.info("Кадр для генерации (%s): %s",
+                unit or "служба не определена", scene[:120])
     return prompt
