@@ -31,7 +31,7 @@ import html
 import secrets
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
@@ -65,6 +65,28 @@ def on_startup() -> None:
             "PANEL_USERNAME/PANEL_PASSWORD не заданы — панель модерации будет "
             "отвечать 503 на все запросы. Задайте их в .env."
         )
+
+
+def require_same_origin(request: Request) -> None:
+    """
+    Защита от запросов с чужих страниц (CSRF).
+
+    Панель закрыта Basic Auth, но браузер подставляет эти данные сам,
+    поэтому форма на постороннем сайте могла отправить POST на
+    /approve/<id> и опубликовать пост от имени модератора. Проверяем,
+    что запрос пришёл с самой панели: у кнопок форм заголовок Origin
+    (или Referer) совпадает с адресом панели, а у чужой страницы — нет.
+    """
+    origin = request.headers.get("origin") or request.headers.get("referer")
+    if not origin:
+        # Браузеры присылают заголовок на все POST из форм. Запрос без
+        # него — не из панели: либо curl, либо скрипт.
+        raise HTTPException(status_code=403, detail="Запрос не из панели")
+
+    expected = str(request.base_url).rstrip("/")
+    if not origin.startswith(expected):
+        logger.warning("Отклонён запрос со стороннего адреса: %s", origin[:80])
+        raise HTTPException(status_code=403, detail="Чужой источник запроса")
 
 
 def require_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
@@ -370,7 +392,8 @@ def get_image(item_id: str, _: str = Depends(require_auth)):
 
 
 @app.post("/approve/{item_id}")
-def approve(item_id: str, _: str = Depends(require_auth)):
+def approve(request: Request, item_id: str, _: str = Depends(require_auth)):
+    require_same_origin(request)
     from bot import build_post_text  # локальный импорт: тот же формат поста
 
     item = db.get_by_id(settings.db_path, item_id)
@@ -409,7 +432,8 @@ def approve(item_id: str, _: str = Depends(require_auth)):
 
 
 @app.post("/reject/{item_id}")
-def reject(item_id: str, _: str = Depends(require_auth)):
+def reject(request: Request, item_id: str, _: str = Depends(require_auth)):
+    require_same_origin(request)
     db.claim_for_moderation(settings.db_path, item_id, NewsStatus.REJECTED)
     return RedirectResponse(url="/", status_code=303)
 

@@ -219,6 +219,18 @@ def init_db(db_path: str):
     ensure_dirs()
     prepare_db_dir(db_path)
 
+    # Пустая база на старте означает, что предыдущая не сохранилась:
+    # роли модераторов, история и подписчики потеряны. Хостинг делает
+    # это при каждой пересборке контейнера, и по журналу это должно
+    # быть видно сразу, а не выясняться, когда человек потерял доступ.
+    if not Path(db_path).exists():
+        logger.warning(
+            "База %s создана заново: роли, выданные командой, не "
+            "сохранились. Постоянные роли задаются переменными "
+            "MAX_ADMIN_IDS и MAX_MODERATOR_IDS, постоянное хранение — "
+            "смонтированным диском в DB_PATH.", db_path,
+        )
+
     with get_connection(db_path) as conn:
         conn.execute(SCHEMA)
         conn.execute(USERS_SCHEMA)

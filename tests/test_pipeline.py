@@ -1534,6 +1534,70 @@ def test_donation_and_uniform() -> None:
           or "No lettering" in prompt_suffix(dps_look))
 
 
+# ==========================================================================
+# 21. Источники и защита панели
+# ==========================================================================
+
+def test_sources_and_panel() -> None:
+    from config import settings
+
+    section("Источники и защита панели")
+
+    # Ленты вузов МВД лежат не там, где у территориальных органов:
+    # сайт объявляет их в разметке главной страницы. Раньше эти сайты
+    # не использовались вовсе.
+    check("ленты вузов подключены", len(settings.mvd_edu_feeds) >= 19,
+          str(len(settings.mvd_edu_feeds)))
+    check("все адреса вузов — сайты МВД",
+          all(".мвд.рф/" in url for url in settings.mvd_edu_feeds))
+    check("дубликатов среди лент вузов нет",
+          len(set(settings.mvd_edu_feeds)) == len(settings.mvd_edu_feeds))
+    check("регионов стало 82", len(settings.mvd_rss_regions) == 82,
+          str(len(settings.mvd_rss_regions)))
+    check("МВД Медиа в списке лент",
+          any("mvdmedia" in url for url in settings.rss_sources))
+
+    # --- защита панели модерации ---
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        return
+
+    import tempfile
+
+    from app import app
+    from storage import db
+
+    saved_db = settings.db_path
+    saved_user, saved_pass = settings.panel_username, settings.panel_password
+    settings.db_path = os.path.join(tempfile.mkdtemp(), "panel.db")
+    settings.panel_username, settings.panel_password = "u", "p"
+    db.init_db(settings.db_path)
+
+    client = TestClient(app)
+    auth = ("u", "p")
+    try:
+        # Basic Auth браузер подставляет сам, поэтому форма на чужом
+        # сайте могла опубликовать пост за модератора.
+        check("запрос с чужого сайта отклонён",
+              client.post("/reject/x", auth=auth,
+                          headers={"Origin": "https://evil.example"}
+                          ).status_code == 403)
+        check("запрос без указания источника отклонён",
+              client.post("/reject/x", auth=auth).status_code == 403)
+        check("запрос из самой панели проходит",
+              client.post("/reject/x", auth=auth,
+                          headers={"Origin": "http://testserver"}
+                          ).status_code == 200)
+        check("без пароля панель не пускает",
+              client.post("/reject/x",
+                          headers={"Origin": "http://testserver"}
+                          ).status_code == 401)
+    finally:
+        settings.db_path = saved_db
+        settings.panel_username, settings.panel_password = saved_user, saved_pass
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
@@ -1542,7 +1606,7 @@ def main() -> int:
         test_media, test_footer_title, test_image_generation,
         test_model_compatibility, test_screen, test_db_path,
         test_live_delivery, test_graphic_filter,
-        test_donation_and_uniform,
+        test_donation_and_uniform, test_sources_and_panel,
     )
 
     for test in tests:

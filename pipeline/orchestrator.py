@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import time
+from urllib.parse import urlsplit
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -118,6 +119,12 @@ class CollectionStats:
 # Сбор
 # --------------------------------------------------------------------------
 
+def _edu_label(url: str) -> str:
+    """Короткое имя вуза из адреса ленты: «урюи.мвд.рф» -> «урюи»."""
+    host = urlsplit(url).netloc
+    return host.split(".")[0] if host else url[:20]
+
+
 def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
     """
     Собирает новости со всех источников параллельно:
@@ -155,6 +162,16 @@ def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
                 jobs.append((
                     pool.submit(fetch_rss, f"https://{code}.мвд.рф/news/rss",
                                 f"МВД: {region}"),
+                    "mvd",
+                ))
+
+        # Вузы МВД: истории курсантов — та же тематика, что и у
+        # территориальных органов, поэтому keyword-фильтр к ним не
+        # применяется, как и к лентам управлений.
+        if settings.mvd_edu_rss_enabled:
+            for url in settings.mvd_edu_feeds:
+                jobs.append((
+                    pool.submit(fetch_rss, url, f"Вуз МВД: {_edu_label(url)}"),
                     "mvd",
                 ))
 
