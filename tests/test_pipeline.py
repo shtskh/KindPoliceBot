@@ -1598,6 +1598,66 @@ def test_sources_and_panel() -> None:
         settings.panel_username, settings.panel_password = saved_user, saved_pass
 
 
+# ==========================================================================
+# 22. Официальная терминология в интерфейсе
+# ==========================================================================
+
+def test_terminology() -> None:
+    """
+    Формулировки для граждан должны совпадать с принятыми в ведомстве.
+
+    «Местное управление МВД» таким термином не является: по Указу
+    Президента РФ от 01.03.2011 № 249 это территориальные органы МВД
+    России на региональном и районном уровне. Проверка нужна, чтобы
+    разговорные обороты не вернулись при следующей правке текстов.
+    """
+    import pathlib
+
+    section("Официальная терминология")
+
+    files = ["content/help_content.py"]
+    for extra in ("max_bot.py", "bot.py"):
+        if pathlib.Path(extra).exists():
+            files.append(extra)
+
+    texts = {f: pathlib.Path(f).read_text(encoding="utf-8") for f in files}
+
+    def user_lines(source: str) -> list[str]:
+        # Комментарии — не интерфейс, их проверять незачем.
+        return [ln for ln in source.splitlines()
+                if not ln.strip().startswith("#")]
+
+    WRONG = {
+        "местного управления": "территориальный орган МВД России",
+        "местное управление": "территориальный орган МВД России",
+        "отдел полиции": "территориальный орган МВД России",
+        "отделе полиции": "территориальный орган МВД России",
+        "паспортный стол": "подразделение по вопросам миграции",
+        "отдел кадров": "подразделение по работе с личным составом",
+    }
+    for bad, good in WRONG.items():
+        hits = [f"{name}: {ln.strip()[:60]}"
+                for name, src in texts.items()
+                for ln in user_lines(src) if bad in ln.lower()]
+        check(f"не употребляется «{bad}» (верно: {good[:34]})",
+              not hits, "; ".join(hits[:2]))
+
+    # Сокращение без «России» в интерфейсе тоже не употребляем.
+    import re
+    bare = [f"{name}: {ln.strip()[:60]}"
+            for name, src in texts.items()
+            for ln in user_lines(src)
+            if re.search(r"МВД(?! России)(?! Медиа)(?! РФ)", ln)]
+    check("«МВД» всегда с «России»", not bare, "; ".join(bare[:2]))
+
+    # А нужные термины на месте.
+    everything = " ".join(texts.values())
+    for term in ("территориальн", "дежурная часть", "КУСП",
+                 "Госавтоинспекц", "по работе с личным составом",
+                 "образовательн"):
+        check(f"используется «{term}»", term in everything)
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
@@ -1607,6 +1667,7 @@ def main() -> int:
         test_model_compatibility, test_screen, test_db_path,
         test_live_delivery, test_graphic_filter,
         test_donation_and_uniform, test_sources_and_panel,
+        test_terminology,
     )
 
     for test in tests:

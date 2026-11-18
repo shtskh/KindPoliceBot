@@ -2,7 +2,7 @@
 Telegram-бот проекта «Мы Вам Доверяем».
 
 Две роли в одном боте:
-  * ПУБЛИЧНАЯ — витрина официальных источников (/resources): каналы МВД
+  * ПУБЛИЧНАЯ — витрина официальных источников (/resources): каналы МВД России
     в Telegram и MAX, образовательные организации МВД России по регионам.
     Доступна всем без исключения.
   * СЛУЖЕБНАЯ — сбор, модерация и публикация новостей. Доступна только
@@ -582,7 +582,7 @@ _CATEGORY_KEYS = {
 _CATEGORY_BY_VALUE = {v: k for k, v in _CATEGORY_KEYS.items()}
 
 _CATEGORY_LABELS = {
-    ResourceCategory.MVD_TELEGRAM.value: "📢 МВД в Telegram",
+    ResourceCategory.MVD_TELEGRAM.value: "📢 МВД России в Telegram",
     ResourceCategory.MVD_MAX.value: "🅼 МВД России в MAX",
     ResourceCategory.INSTITUTE.value: "🎓 Вузы МВД России",
 }
@@ -660,7 +660,7 @@ async def cmd_resources(message: Message):
     total = sum(counts.values())
     await message.answer(
         "🏛 <b>Официальные источники</b>\n\n"
-        f"В справочнике {total} проверенных ссылок: каналы МВД в Telegram "
+        f"В справочнике {total} проверенных ссылок: каналы МВД России в Telegram "
         "и MAX, а также образовательные организации МВД России.\n\n"
         "Выберите категорию:",
         reply_markup=_public_menu_keyboard(),
@@ -1092,8 +1092,9 @@ async def cmd_region(message: Message):
     if current:
         header += f"Сейчас выбран: <b>{html.escape(current)}</b>\n\n"
     header += (
-        "Регион нужен, чтобы показывать вам каналы местного управления МВД России "
-        "и новости вашего края в первую очередь.\n\nВыберите регион:"
+        "Регион нужен, чтобы показывать каналы территориального органа "
+        "МВД России по вашему субъекту и новости вашего региона в первую "
+        "очередь.\n\nВыберите регион:"
     )
 
     await message.answer(header, reply_markup=_user_region_keyboard())
@@ -1330,7 +1331,7 @@ PUBLIC_GREETING = (
     "🆘 памятки «что делать, если…» — кража, ДТП, мошенники, пропал человек\n"
     "☎️ телефоны экстренных служб\n"
     "💬 вопрос своими словами — подскажу, куда идти и какие у вас права\n"
-    "🏛 официальные каналы МВД в Telegram и MAX по всем регионам\n"
+    "🏛 официальные каналы МВД России в Telegram и MAX по всем регионам\n"
     "🎓 как поступить в вуз МВД России\n\n"
     "Выберите раздел кнопками внизу 👇"
 )
@@ -1343,7 +1344,7 @@ PUBLIC_HELP = (
     "💬 <b>Задать вопрос</b> — помощник ответит своими словами\n"
     "🏛 <b>Источники МВД России</b> — официальные каналы по регионам\n"
     "📰 <b>Хорошие новости</b> — последние публикации\n"
-    "🎓 <b>Учёба в МВД</b> — как поступить, список вузов\n"
+    "🎓 <b>Учёба в МВД России</b> — поступление, перечень образовательных организаций\n"
     "📍 <b>Мой регион</b> — подобрать источники и новости по краю\n"
     "ℹ️ <b>О проекте</b>\n\n"
     "<b>Команды</b>\n"
@@ -2382,9 +2383,9 @@ async def setup_bot_commands() -> None:
         BotCommand(command="situations", description="Что делать, если…"),
         BotCommand(command="phones", description="Экстренные телефоны"),
         BotCommand(command="ask", description="Задать вопрос"),
-        BotCommand(command="resources", description="Официальные источники МВД"),
+        BotCommand(command="resources", description="Официальные источники МВД России"),
         BotCommand(command="news", description="Хорошие новости"),
-        BotCommand(command="education", description="Учёба в МВД"),
+        BotCommand(command="education", description="Учёба в МВД России"),
         BotCommand(command="region", description="Выбрать свой регион"),
         BotCommand(command="about", description="О проекте"),
         BotCommand(command="help", description="Справка"),

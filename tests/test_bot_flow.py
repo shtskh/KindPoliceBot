@@ -392,7 +392,8 @@ async def scenario_education_about() -> None:
     print("\nУчёба и о проекте")
 
     recorded = await send_text(tb.BTN_EDUCATION)
-    check("раздел учёбы отвечает", "вуз" in recorded.all_text.lower())
+    check("раздел учёбы отвечает",
+          "образовательны" in recorded.all_text.lower())
     check_outgoing("учёба", recorded)
 
     recorded = await send_text(tb.BTN_ABOUT)
