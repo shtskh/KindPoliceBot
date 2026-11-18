@@ -328,7 +328,7 @@ async def scenario_phones() -> None:
     text = recorded.all_text
     check("есть 112", "112" in text)
     check("есть 102", "102" in text)
-    check("есть телефон доверия МВД", "222-74-47" in text)
+    check("есть телефон доверия МВД России", "222-74-47" in text)
     check_outgoing("телефоны", recorded)
 
 

@@ -90,7 +90,7 @@ class CollectionStats:
     def summary_lines(self) -> list[str]:
         lines = [
             f"📥 Собрано из источников: {self.raw_collected}",
-            f"      МВД: {self.mvd_collected} · "
+            f"      МВД России: {self.mvd_collected} · "
             f"Telegram: {self.telegram_collected} · СМИ: {self.media_collected}",
             f"🔎 Проверено моделью: {self.llm_checks}",
             f"♻️ Пропущено как дубликаты: {self.duplicates}",
@@ -129,7 +129,7 @@ def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
     """
     Собирает новости со всех источников параллельно:
 
-      - официальные ленты МВД (федеральная + территориальные) — главный
+      - официальные ленты МВД России (федеральная + территориальные) — главный
         источник: именно там полиция публикует истории о спасениях,
         и там же сразу известен регион;
       - общие ленты СМИ — с keyword-фильтром, они шумные;
@@ -161,17 +161,17 @@ def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
                 region = region_for_code(code) or f"регион {code}"
                 jobs.append((
                     pool.submit(fetch_rss, f"https://{code}.мвд.рф/news/rss",
-                                f"МВД: {region}"),
+                                f"МВД России: {region}"),
                     "mvd",
                 ))
 
-        # Вузы МВД: истории курсантов — та же тематика, что и у
+        # Вузы МВД России: истории курсантов — та же тематика, что и у
         # территориальных органов, поэтому keyword-фильтр к ним не
         # применяется, как и к лентам управлений.
         if settings.mvd_edu_rss_enabled:
             for url in settings.mvd_edu_feeds:
                 jobs.append((
-                    pool.submit(fetch_rss, url, f"Вуз МВД: {_edu_label(url)}"),
+                    pool.submit(fetch_rss, url, f"Вуз МВД России: {_edu_label(url)}"),
                     "mvd",
                 ))
 
@@ -205,11 +205,11 @@ def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
 
     media_filtered = filter_by_keywords(media_items, settings.police_keywords)
     logger.info(
-        "Собрано: МВД %d, СМИ %d (после keyword-фильтра %d), Telegram %d",
+        "Собрано: МВД России %d, СМИ %d (после keyword-фильтра %d), Telegram %d",
         len(mvd_items), len(media_items), len(media_filtered), len(telegram_items),
     )
 
-    # Telegram-каналы и ленты МВД вперёд: это первоисточники.
+    # Telegram-каналы и ленты МВД России вперёд: это первоисточники.
     combined = telegram_items + mvd_items + media_filtered
     stats.raw_collected = len(combined)
     stats.mvd_collected = len(mvd_items)
@@ -236,7 +236,7 @@ def _is_too_old(raw: RawNewsItem) -> bool:
 # Обработка одной новости
 # --------------------------------------------------------------------------
 
-# Короче этого текст новости считается «только заголовком»: ленты МВД
+# Короче этого текст новости считается «только заголовком»: ленты МВД России
 # отдают в RSS пустой summary, и без догрузки страницы и модель, и
 # дедупликация работали по одной строке.
 MIN_TEXT_FOR_LLM = 200
